@@ -8,7 +8,7 @@ public struct Node: Sendable, Hashable {
     public var modifiedAt: Date
 
     public init(
-        id: NodeID = UUID(),
+        id: NodeID = IDFactory.live.nodeID(),
         label: String,
         properties: [String: PropertyValue] = [:],
         createdAt: Date = Date(),

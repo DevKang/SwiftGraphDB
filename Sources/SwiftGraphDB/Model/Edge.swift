@@ -10,7 +10,7 @@ public struct Edge: Sendable, Hashable {
     public var modifiedAt: Date
 
     public init(
-        id: EdgeID = UUID(),
+        id: EdgeID = IDFactory.live.edgeID(),
         type: String,
         fromID: NodeID,
         toID: NodeID,
