@@ -28,7 +28,7 @@ public final class SQLiteStore: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    public init(at url: URL) throws {
+    public init(at url: URL, configuration: SQLiteConfiguration = .default) throws {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(url.path, &handle, flags, nil)
@@ -38,14 +38,15 @@ public final class SQLiteStore: @unchecked Sendable {
             throw SQLiteError.open(code: rc, message: message)
         }
         self.db = handle
+        try applyConfiguration(configuration, isInMemory: false)
     }
 
     /// Open an in-memory store. No file is created.
-    public static func openInMemory() throws -> SQLiteStore {
-        try SQLiteStore(memoryURL: URL(fileURLWithPath: ":memory:"))
+    public static func openInMemory(configuration: SQLiteConfiguration = .default) throws -> SQLiteStore {
+        try SQLiteStore(memoryURL: URL(fileURLWithPath: ":memory:"), configuration: configuration)
     }
 
-    private init(memoryURL: URL) throws {
+    private init(memoryURL: URL, configuration: SQLiteConfiguration) throws {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(":memory:", &handle, flags, nil)
@@ -55,6 +56,29 @@ public final class SQLiteStore: @unchecked Sendable {
             throw SQLiteError.open(code: rc, message: message)
         }
         self.db = handle
+        try applyConfiguration(configuration, isInMemory: true)
+    }
+
+    /// Apply `SQLiteConfiguration` PRAGMAs immediately after the connection is established and
+    /// before any user query runs. SPEC §6.3 requires this ordering.
+    ///
+    /// `journal_mode = WAL` is unsupported on `:memory:` — the engine reports the request and
+    /// silently falls back. We honour that fallback rather than throwing, so an in-memory store
+    /// is interchangeable in tests.
+    private func applyConfiguration(_ config: SQLiteConfiguration, isInMemory: Bool) throws {
+        if config.journalModeWAL && !isInMemory {
+            try execute("PRAGMA journal_mode = WAL")
+        }
+        try execute("PRAGMA synchronous = \(config.synchronous.rawValue)")
+        if config.tempStoreInMemory {
+            try execute("PRAGMA temp_store = MEMORY")
+        }
+        try execute("PRAGMA mmap_size = \(config.mmapSize)")
+        // Negative cache_size means KB rather than pages.
+        try execute("PRAGMA cache_size = \(-config.cacheSizeKB)")
+        if !isInMemory {
+            try execute("PRAGMA wal_autocheckpoint = \(config.walAutocheckpoint)")
+        }
     }
 
     public func close() {
