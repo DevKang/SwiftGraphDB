@@ -103,6 +103,29 @@ public final class SQLiteStore: @unchecked Sendable {
 
     /// Run a `SELECT` and map each row through `rowHandler`. The handler is called once per
     /// row in a streaming fashion; results are accumulated and returned as an array.
+    /// Run a `SELECT` and invoke `rowHandler` for each row without accumulating results. Use
+    /// this for large rebuild scans where holding every decoded row in memory is wasteful.
+    public func forEach(
+        _ sql: String,
+        _ params: [SQLValue] = [],
+        _ rowHandler: (Row) throws -> Void
+    ) throws {
+        let stmt = try prepare(sql: sql, params: params)
+        defer { sqlite3_finalize(stmt) }
+        let row = Row(stmt: stmt)
+        while true {
+            let rc = sqlite3_step(stmt)
+            switch rc {
+            case SQLITE_ROW:
+                try rowHandler(row)
+            case SQLITE_DONE:
+                return
+            default:
+                throw SQLiteError.step(code: rc, message: String(cString: sqlite3_errmsg(db)))
+            }
+        }
+    }
+
     public func query<T>(
         _ sql: String,
         _ params: [SQLValue] = [],
