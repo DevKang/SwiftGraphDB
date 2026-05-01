@@ -67,4 +67,8 @@ public struct IndexMap: Sendable {
 
     /// Number of currently interned ids (excludes released slots). Mostly useful in tests.
     public var count: Int { forward.count }
+
+    /// Size of the dense index range — i.e. the highest allocated index + 1, including
+    /// released slots. CSR builders use this to size their offsets array.
+    public var countIncludingFreed: Int { reverse.count }
 }
