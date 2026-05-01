@@ -173,6 +173,12 @@ public actor GraphActor {
         labelIndex.nodes(labeled: label)
     }
 
+    public func propertyIndexNodes(
+        label: String, property: String, equals value: PropertyValue
+    ) -> Set<NodeID>? {
+        propertyIndex.nodes(label: label, property: property, equals: value)
+    }
+
     public var unsafeStoreForTests: SQLiteStore { store }
 
     public struct InternalSnapshot: Sendable {
