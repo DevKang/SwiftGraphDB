@@ -1,0 +1,35 @@
+## Swift / SwiftPM
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+*.xcodeproj
+.netrc
+
+## Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcscmblueprint
+
+## macOS
+.DS_Store
+
+## Editors
+.vscode/
+.idea/
+
+## Build artifacts
+*.o
+*.a
+*.dylib
+*.so
+
+## Test artifacts
+*.xcresult
+
+## SQLite test databases
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
