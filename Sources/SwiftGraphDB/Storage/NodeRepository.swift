@@ -16,12 +16,15 @@ public struct NodeRepository: Sendable {
     // MARK: - Insert
 
     /// Insert a node. Throws if a row with the same id already exists (soft-deleted or not).
+    /// The persisted `revision` matches `node.revision` — callers (the graph actor) are
+    /// expected to stamp a real revision before calling.
     public func insert(_ node: Node) throws {
         let blob = try PropertyCoding.encode(node.properties)
+        let revisionJSON = try Self.encodeRevision(node.revision)
         try store.execute(
             """
-            INSERT INTO nodes (id, label, properties, created_at, modified_at, is_deleted)
-            VALUES (?, ?, ?, ?, ?, 0)
+            INSERT INTO nodes (id, label, properties, created_at, modified_at, is_deleted, revision)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
             """,
             [
                 .text(node.id.uuidString),
@@ -29,6 +32,7 @@ public struct NodeRepository: Sendable {
                 .blob(blob),
                 .real(node.createdAt.timeIntervalSince1970),
                 .real(node.modifiedAt.timeIntervalSince1970),
+                .text(revisionJSON),
             ]
         )
     }
@@ -39,7 +43,7 @@ public struct NodeRepository: Sendable {
     public func fetch(id: NodeID) throws -> Node? {
         let rows = try store.query(
             """
-            SELECT id, label, properties, created_at, modified_at
+            SELECT id, label, properties, created_at, modified_at, revision, is_deleted
             FROM nodes
             WHERE id = ? AND is_deleted = 0
             """,
@@ -52,7 +56,7 @@ public struct NodeRepository: Sendable {
     public func fetchAll(label: String) throws -> [Node] {
         try store.query(
             """
-            SELECT id, label, properties, created_at, modified_at
+            SELECT id, label, properties, created_at, modified_at, revision, is_deleted
             FROM nodes
             WHERE label = ? AND is_deleted = 0
             """,
@@ -62,9 +66,12 @@ public struct NodeRepository: Sendable {
 
     // MARK: - Update
 
-    /// Merge `properties` into the existing row's properties, then bump `modified_at`. Throws if
-    /// the node does not exist or is soft-deleted (no silent no-op).
-    public func update(id: NodeID, properties patch: [String: PropertyValue]) throws {
+    /// Merge `properties` into the existing row's properties, bump `modified_at`, and stamp
+    /// the new `revision`. Throws if the node does not exist or is soft-deleted (no silent
+    /// no-op). Throws `RepositoryError.placeholderRevision` if the caller hands in
+    /// `GraphRevision.placeholder` — committers must stamp a real revision first.
+    public func update(id: NodeID, properties patch: [String: PropertyValue], revision: GraphRevision) throws {
+        try Self.requireRealRevision(revision)
         guard let existing = try fetch(id: id) else {
             throw RepositoryError.notFound(id: id.uuidString)
         }
@@ -74,12 +81,13 @@ public struct NodeRepository: Sendable {
         try store.execute(
             """
             UPDATE nodes
-            SET properties = ?, modified_at = ?
+            SET properties = ?, modified_at = ?, revision = ?
             WHERE id = ? AND is_deleted = 0
             """,
             [
                 .blob(blob),
                 .real(Date().timeIntervalSince1970),
+                .text(try Self.encodeRevision(revision)),
                 .text(id.uuidString),
             ]
         )
@@ -87,16 +95,19 @@ public struct NodeRepository: Sendable {
 
     // MARK: - Delete (soft)
 
-    /// Soft-delete: mark `is_deleted = 1`. The row remains in the table for sync / rebuild.
-    public func delete(id: NodeID) throws {
+    /// Soft-delete: mark `is_deleted = 1` and stamp the deleting actor's revision so
+    /// tombstones carry their own logical version (sync needs this to propagate deletes).
+    public func delete(id: NodeID, revision: GraphRevision) throws {
+        try Self.requireRealRevision(revision)
         try store.execute(
             """
             UPDATE nodes
-            SET is_deleted = 1, modified_at = ?
+            SET is_deleted = 1, modified_at = ?, revision = ?
             WHERE id = ?
             """,
             [
                 .real(Date().timeIntervalSince1970),
+                .text(try Self.encodeRevision(revision)),
                 .text(id.uuidString),
             ]
         )
@@ -114,13 +125,37 @@ public struct NodeRepository: Sendable {
             throw RepositoryError.malformedRow
         }
         let properties = try PropertyCoding.decode(blob)
+        let revisionJSON = row.text(at: 5)
+        let isDeleted = (row.int(at: 6) ?? 0) != 0
+        let revision: GraphRevision
+        if let revisionJSON, let data = revisionJSON.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(GraphRevision.self, from: data) {
+            revision = decoded
+        } else {
+            revision = GraphRevision.placeholder(wallClock: Date(timeIntervalSince1970: modifiedAtRaw))
+        }
         return Node(
             id: id,
             label: label,
             properties: properties,
             createdAt: Date(timeIntervalSince1970: createdAtRaw),
-            modifiedAt: Date(timeIntervalSince1970: modifiedAtRaw)
+            modifiedAt: Date(timeIntervalSince1970: modifiedAtRaw),
+            revision: revision,
+            isDeleted: isDeleted
         )
+    }
+
+    static func encodeRevision(_ revision: GraphRevision) throws -> String {
+        let data = try JSONEncoder().encode(revision)
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    static func requireRealRevision(_ revision: GraphRevision) throws {
+        // Placeholder uses the zero UUID; reject so committers don't accidentally write it.
+        let zero = ActorID(uuid: (0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0))
+        if revision.actorID == zero && revision.counter == 0 {
+            throw RepositoryError.placeholderRevision
+        }
     }
 }
 
@@ -129,4 +164,7 @@ public enum RepositoryError: Error, Equatable {
     case notFound(id: String)
     case endpointMissing(id: String)
     case malformedRow
+    /// Caller passed `GraphRevision.placeholder` to a write that requires a stamped revision.
+    /// The graph actor mints a real revision on commit; tests / SPI callers must do the same.
+    case placeholderRevision
 }

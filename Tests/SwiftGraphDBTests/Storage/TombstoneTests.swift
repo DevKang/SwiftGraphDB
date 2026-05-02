@@ -2,6 +2,13 @@ import XCTest
 @testable import SwiftGraphDB
 
 final class TombstoneTests: XCTestCase {
+    private let testActor = ActorID()
+    private var counter: Int64 = 0
+    private func nextRev() -> GraphRevision {
+        counter += 1
+        return GraphRevision(actorID: testActor, counter: counter, wallClock: Date())
+    }
+
 
     // MARK: - Soft delete keeps the row
 
@@ -11,7 +18,7 @@ final class TombstoneTests: XCTestCase {
         let n = Node(label: "Person", properties: ["name": "Alice"])
         try repo.insert(n)
 
-        try repo.delete(id: n.id)
+        try repo.delete(id: n.id, revision: nextRev())
 
         // Row count is unchanged — only is_deleted flipped.
         let count = try store.query("SELECT COUNT(*) FROM nodes") { $0.int(at: 0)! }.first
@@ -37,7 +44,7 @@ final class TombstoneTests: XCTestCase {
         try repo.insert(dead)
 
         let cutoff = Date(timeIntervalSinceNow: -1) // include all from now back 1s
-        try repo.delete(id: dead.id)
+        try repo.delete(id: dead.id, revision: nextRev())
 
         let dueAfterCutoff = try tombstones.nodeTombstones(since: cutoff)
         XCTAssertEqual(dueAfterCutoff.map(\.id), [dead.id])
@@ -58,7 +65,7 @@ final class TombstoneTests: XCTestCase {
         try edges.insert(edge)
 
         let cutoff = Date(timeIntervalSinceNow: -1)
-        try edges.delete(id: edge.id)
+        try edges.delete(id: edge.id, revision: nextRev())
 
         let dead = try tombstones.edgeTombstones(since: cutoff)
         XCTAssertEqual(dead.map(\.id), [edge.id])
@@ -73,7 +80,7 @@ final class TombstoneTests: XCTestCase {
         defer { store.close() }
         let id = IDFactory.live.nodeID()
         try repo.insert(Node(id: id, label: "Person"))
-        try repo.delete(id: id)
+        try repo.delete(id: id, revision: nextRev())
 
         XCTAssertThrowsError(try repo.insert(Node(id: id, label: "Person")))
     }
@@ -92,7 +99,7 @@ final class TombstoneTests: XCTestCase {
             let n = Node(label: "Person")
             try repo.insert(n)
             id = n.id
-            try repo.delete(id: id)
+            try repo.delete(id: id, revision: nextRev())
             store.close()
         }
 

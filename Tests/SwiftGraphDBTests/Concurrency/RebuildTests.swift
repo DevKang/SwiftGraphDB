@@ -95,7 +95,8 @@ final class RebuildTests: XCTestCase {
         let dead = Node(label: "Person", properties: ["name": "Dead"])
         try nodes.insert(alive)
         try nodes.insert(dead)
-        try nodes.delete(id: dead.id)
+        try nodes.delete(id: dead.id,
+                         revision: GraphRevision(actorID: ActorID(), counter: 1, wallClock: Date()))
 
         let result = try RebuildFromSQLite.rebuild(store: store, propertyIndexSpecs: [])
         XCTAssertEqual(result.indexMap.count, 1)
