@@ -8,7 +8,9 @@ import Foundation
 /// in-memory budget.
 public struct LabelIndex: Sendable {
 
-    private var byLabel: [String: Set<NodeID>] = [:]
+    fileprivate var byLabel: [String: Set<NodeID>] = [:]
+    /// Backing snapshot for read-only union helpers.
+    @_spi(Internal) public var labelMap: [String: Set<NodeID>] { byLabel }
 
     public init() {}
 
