@@ -24,19 +24,30 @@ public struct CloudKitGraphSyncTransport: GraphSyncTransport, Sendable {
         /// this we surface the changes as `.transient` so the registry switches to .offline.
         public var maxBackoffAttempts: Int
         public var clock: any TransportClock
+        /// When true, every push/pull asks `accountProbe` for the iCloud account status before
+        /// touching the network. Apps that handle account state themselves can disable this.
+        public var preflightAccountState: Bool
+        /// Probe the transport asks for the current iCloud account state. `nil` skips the
+        /// preflight regardless of `preflightAccountState`. Production wraps `CKContainer`;
+        /// tests inject a `MockAccountStatusProbe`.
+        public var accountProbe: (any CloudKitAccountStatusProbe)?
 
         public init(
             maxBatchSize: Int = 300,
             initialBackoff: TimeInterval = 1.0,
             maxBackoff: TimeInterval = 300.0,
             maxBackoffAttempts: Int = 6,
-            clock: any TransportClock = SystemTransportClock()
+            clock: any TransportClock = SystemTransportClock(),
+            preflightAccountState: Bool = true,
+            accountProbe: (any CloudKitAccountStatusProbe)? = nil
         ) {
             self.maxBatchSize = maxBatchSize
             self.initialBackoff = initialBackoff
             self.maxBackoff = maxBackoff
             self.maxBackoffAttempts = maxBackoffAttempts
             self.clock = clock
+            self.preflightAccountState = preflightAccountState
+            self.accountProbe = accountProbe
         }
     }
 
@@ -55,6 +66,7 @@ public struct CloudKitGraphSyncTransport: GraphSyncTransport, Sendable {
     }
 
     public func push(_ batch: ChangeBatch) async throws -> PushResult {
+        try await preflightAccountStateIfNeeded()
         // 1. Slice the batch into config-sized chunks up-front. Each chunk goes through its own
         //    retry/split state machine. We accumulate results across all chunks.
         let chunks = chunked(batch.changes, by: configuration.maxBatchSize)
@@ -166,6 +178,19 @@ public struct CloudKitGraphSyncTransport: GraphSyncTransport, Sendable {
         return (accepted, rejected)
     }
 
+    private func preflightAccountStateIfNeeded() async throws {
+        guard configuration.preflightAccountState, let probe = configuration.accountProbe else { return }
+        let status: CloudKitAccountStatus
+        do {
+            status = try await probe.currentStatus()
+        } catch let configError as CloudKitConfigurationError {
+            throw configError
+        }
+        if status != .available {
+            throw CloudKitAccountError.notAvailable(status)
+        }
+    }
+
     private func backoffDelay(retryAfter: TimeInterval?, attempt: Int) -> TimeInterval {
         if let hint = retryAfter, hint > 0 {
             return min(hint, configuration.maxBackoff)
@@ -175,6 +200,7 @@ public struct CloudKitGraphSyncTransport: GraphSyncTransport, Sendable {
     }
 
     public func pull(since checkpoint: SyncCheckpoint?) async throws -> PullResult {
+        try await preflightAccountStateIfNeeded()
         let token = checkpoint?.data
         let fetched = try await database.fetchChanges(sinceServerChangeToken: token)
 
@@ -251,4 +277,35 @@ public struct SystemTransportClock: TransportClock {
     public func sleep(seconds: TimeInterval) async throws {
         try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
     }
+}
+
+// MARK: - Account state
+
+/// Mirrors `CKAccountStatus` without leaking CloudKit symbols into the core.
+public enum CloudKitAccountStatus: Sendable, Equatable {
+    case available
+    case noAccount
+    case restricted
+    case temporarilyUnavailable
+    case couldNotDetermine
+}
+
+/// Adapter-side probe for the iCloud account state. Production wraps `CKContainer`'s account
+/// status APIs and the `CKAccountChanged` notification; tests inject a configurable mock.
+public protocol CloudKitAccountStatusProbe: Sendable {
+    func currentStatus() async throws -> CloudKitAccountStatus
+}
+
+/// Surfaced when the iCloud account isn't usable. The sync registry treats this as `.offline`
+/// — local writes keep working, the loop resumes when the account becomes available.
+public enum CloudKitAccountError: Error, Sendable, Equatable {
+    case notAvailable(CloudKitAccountStatus)
+}
+
+/// Surfaced when the app is missing the iCloud entitlement or the container isn't reachable.
+/// This is a permanent configuration error; surface to the developer immediately rather than
+/// retrying.
+public enum CloudKitConfigurationError: Error, Sendable, Equatable {
+    case missingEntitlement(String)
+    case containerMisconfigured(String)
 }
