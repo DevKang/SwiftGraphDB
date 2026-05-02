@@ -131,9 +131,14 @@ extension GraphChange {
     public init(from row: ChangeJournalRow) {
         let entityKind: GraphEntityKind = (row.entityKind == .node) ? .node : .edge
         var payload: GraphRecordPayload?
-        if row.operation == .upsert, let blob = row.payload,
-           let dict = try? PropertyCoding.decode(blob) {
-            payload = GraphRecordPayload(properties: dict)
+        if row.operation == .upsert, let blob = row.payload {
+            // Try the v2 GraphRecordPayload shape first; fall back to bare property dict for
+            // forward compatibility with anything that wrote a non-payload BLOB.
+            if let p = try? JSONDecoder().decode(GraphRecordPayload.self, from: blob) {
+                payload = p
+            } else if let dict = try? PropertyCoding.decode(blob) {
+                payload = GraphRecordPayload(properties: dict)
+            }
         }
         self.init(
             id: row.changeID,
