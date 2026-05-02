@@ -1,6 +1,6 @@
 # Contributing to SwiftGraphDB
 
-Thanks for your interest in contributing. This document covers the day-to-day workflow. For architectural context, read [SPEC.md](SPEC.md) first — especially the **Design Stability** table and **Open Questions** section.
+Thanks for your interest in contributing. This document covers the day-to-day workflow. For architectural context, read [SPEC.md](SPEC.md) and [CHANGELOG.md](CHANGELOG.md) first — especially the **Design Stability** table and **Open Questions** section, and the most recent direction recorded under `[Unreleased]`.
 
 ## Development setup
 
@@ -43,11 +43,13 @@ Benchmark tests are not required for ordinary PRs unless your change touches sto
 Open a GitHub Discussion before starting work in these areas:
 
 - public API shape (`GraphStore`, query builder, traversal)
-- SQLite schema or persistence layout
+- SQLite schema or persistence layout (especially the change journal)
 - in-memory adjacency representation (CSR / EdgeLog)
 - compaction policy
-- CloudKit conflict resolution
+- the sync protocol boundary (`GraphChange`, `GraphSyncTransport`, `GraphConflictResolver`)
 - the typed schema layer
+
+Backend adapters (CloudKit, REST, Firebase, Supabase, custom) must not introduce dependencies into the core target. Land them as separate packages.
 
 These are flagged in the **Design Stability** table in SPEC.md.
 

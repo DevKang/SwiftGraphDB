@@ -1,17 +1,17 @@
 # SwiftGraphDB
 
-> An embedded property graph database for Swift apps.
+> An embedded property graph database for Swift apps, with a backend-agnostic sync protocol.
 
 [![Swift](https://img.shields.io/badge/Swift-6.0+-orange.svg)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%2017%2B%20%7C%20macOS%2014%2B-blue.svg)](https://developer.apple.com)
+[![Platforms](https://img.shields.io/badge/Platforms-iOS%2016%2B%20%7C%20macOS%2013%2B-blue.svg)](https://developer.apple.com)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Usable%20Local%20Engine-yellow.svg)]()
 
-SwiftGraphDB is an open-source, embedded property graph database for Apple platforms. Use it when your app stores highly connected local data and needs graph traversal without running a server, a JVM, or an external database process.
+SwiftGraphDB is an open-source, embedded property graph database for Apple-platform apps. Use it when your app stores highly connected local data and needs graph traversal without running a server, a JVM, or an external database process.
 
-It is designed to be small, embeddable, Swift-native, and app-process local — closer to SQLite in deployment model than to a server graph database.
+The core package is local-first. It provides graph storage, traversal, SQLite-backed durability, a change journal, and sync protocol types. It does **not** require CloudKit, iCloud, network access, or a specific backend.
 
-CloudKit sync is optional. The core database is local-first and works without iCloud.
+Sync is optional and pluggable. CloudKit support should live in a separate adapter package, such as `SwiftGraphDBCloudKit`, built on top of the same sync protocol used by REST, Firebase, Supabase, or custom transports.
 
 ---
 
@@ -26,7 +26,7 @@ SwiftGraphDB is a good fit when your app has local data shaped like a graph:
 - app-internal dependency graphs
 - concept maps, entity graphs, and semantic links
 
-Use SQLite, Core Data, or GRDB directly when your data is mostly tabular and you rarely traverse relationships beyond one or two hops.
+Use SQLite, Core Data, GRDB, or SwiftData directly when your data is mostly tabular and relationship traversal is not a primary operation.
 
 ---
 
@@ -39,7 +39,9 @@ SwiftGraphDB is intended to be usable as a local embedded graph database before 
 - Property graph model: nodes, directed edges, labels, types, and properties
 - Swift-native API for creating nodes and edges
 - Local traversal API for common graph queries
-- Local persistence backed by SQLite
+- SQLite-backed local persistence
+- Append-only change journal for sync adapters
+- Backend-agnostic sync protocol types
 - Single-process usage for iOS and macOS apps
 
 ### Experimental or evolving
@@ -49,11 +51,14 @@ SwiftGraphDB is intended to be usable as a local embedded graph database before 
 - Launch snapshot format
 - Property indexes
 - Advanced path queries
+- Conflict resolution policies for sync
 - Performance tuning and benchmark coverage
 
-### Optional module
+### Separate packages
 
-- CloudKit sync via `CKSyncEngine`
+- `SwiftGraphDBCloudKit` — planned CloudKit reference adapter
+- `SwiftGraphDBREST` — possible REST reference adapter
+- third-party adapters for Firebase, Supabase, custom servers, or local-file sync
 
 The public API may still change before `1.0`. See [SPEC.md](SPEC.md) for design stability and open questions.
 
@@ -69,55 +74,84 @@ let graph = try await GraphStore.open(at: .applicationSupport("MyGraph"))
 
 // Insert nodes.
 let alice = try await graph.addNode(label: "Person", properties: [
-    "name": "Alice",
-    "age": 32
+    "name": .string("Alice"),
+    "age": .int(32)
 ])
 
 let bob = try await graph.addNode(label: "Person", properties: [
-    "name": "Bob",
-    "age": 28
+    "name": .string("Bob"),
+    "age": .int(28)
 ])
 
 // Insert a directed edge.
 try await graph.addEdge(from: alice, to: bob, type: "KNOWS", properties: [
-    "since": 2021
+    "since": .int(2021)
 ])
 
 // Traverse the graph.
 let friends = try await graph
     .nodes(labeled: "Person")
-    .where("name", equals: "Alice")
+    .where("name", equals: .string("Alice"))
     .traverse(.outgoing, edge: "KNOWS", maxDepth: 2)
     .collect()
 ```
 
 ---
 
-## Optional: CloudKit Sync
+## Optional Sync
 
-CloudKit sync is not required to use SwiftGraphDB. The local SQLite store remains the source of truth; CloudKit is a replication layer for a user's private database.
+SwiftGraphDB core does not know or care which backend you use. Sync is modeled as graph changes exchanged through a transport.
 
 ```swift
-try await graph.enableCloudKitSync(container: .default)
+import SwiftGraphDB
 
-for await status in graph.syncStatus {
-    switch status {
-    case .idle:
-        break
-    case .syncing:
-        showSyncIndicator()
-    case .error(let error):
-        handleSyncError(error)
-    }
+let graph = try await GraphStore.open(named: "MyGraph")
+
+try await graph.enableSync(
+    transport: MySyncTransport(),
+    resolver: FieldLevelMergeResolver(
+        sameFieldConflict: .remoteWins,
+        deleteConflict: .fail
+    )
+)
+```
+
+The core sync boundary is intentionally small:
+
+```swift
+public protocol GraphSyncTransport: Sendable {
+    var backendID: SyncBackendID { get }
+
+    func push(_ batch: ChangeBatch) async throws -> PushResult
+    func pull(since checkpoint: SyncCheckpoint?) async throws -> PullResult
 }
 ```
 
-CloudKit sync requires:
+Transport adapters are responsible for network or backend-specific details. The core package remains responsible for local durability, change ordering, graph invariants, and conflict resolution hooks.
 
-- iOS 17.0+ / macOS 14.0+
-- CloudKit entitlements
-- an active iCloud account on the user's device
-- a configured CloudKit container
+### CloudKit reference adapter
+
+CloudKit is important for Apple-first apps, but it is not a requirement of the core database.
+
+```swift
+import SwiftGraphDB
+import SwiftGraphDBCloudKit
+
+let graph = try await GraphStore.open(named: "MyGraph")
+
+let transport = CloudKitGraphSyncTransport(
+    container: .default,
+    databaseScope: .private,
+    zoneName: "graphdb-private"
+)
+
+try await graph.enableSync(
+    transport: transport,
+    resolver: .fieldLevelMerge()
+)
+```
+
+The CloudKit adapter can use `CKSyncEngine`, CloudKit record zones, retry behavior, and record mapping without leaking those concepts into the core package.
 
 ---
 
@@ -149,8 +183,30 @@ SwiftGraphDB separates traversal from durability:
 
 - in-memory graph structures handle traversal
 - SQLite stores durable node and edge records
+- an append-only change journal records local mutations for sync adapters
 - optional indexes speed up common lookup paths
 - optional snapshots accelerate launch and rebuild time
+
+### Change-based sync
+
+SwiftGraphDB syncs graph changes, not full database snapshots.
+
+```swift
+public struct GraphChange: Codable, Sendable, Hashable {
+    public let id: ChangeID
+    public let graphID: GraphID
+    public let actorID: ActorID
+    public let sequence: Int64
+    public let entity: GraphEntityRef
+    public let operation: GraphOperation
+    public let payload: GraphRecordPayload?
+    public let baseRevision: GraphRevision?
+    public let revision: GraphRevision
+    public let createdAt: Date
+}
+```
+
+This makes sync incremental, testable, and portable across backends.
 
 ### Swift-native queries
 
@@ -165,7 +221,7 @@ SwiftGraphDB does not require Cypher, SPARQL, or SQL for everyday usage. Queries
 │                    Swift Query API                          │
 │         graph.nodes(labeled:).traverse(.outgoing)           │
 ├─────────────────────────────────────────────────────────────┤
-│                   Graph Actor / Store                       │
+│                   Graph Store / Actor                       │
 │              Serialized writes · Concurrent reads           │
 ├──────────────────────────┬──────────────────────────────────┤
 │    In-Memory Layer       │      Index Layer                 │
@@ -178,10 +234,15 @@ SwiftGraphDB does not require Cypher, SPARQL, or SQL for everyday usage. Queries
 │                                                             │
 │   SQLite in WAL mode       Optional launch snapshot         │
 │   nodes / edges tables      Rebuildable from SQLite         │
+│   change_journal            sync_checkpoints                │
 ├─────────────────────────────────────────────────────────────┤
-│                    Optional Sync Module                     │
+│                  Sync Protocol Boundary                     │
 │                                                             │
-│   CKSyncEngine + CloudKit private database                  │
+│   GraphChange · GraphSyncTransport · ConflictResolver       │
+├─────────────────────────────────────────────────────────────┤
+│                  Optional Adapter Packages                  │
+│                                                             │
+│   CloudKit · REST · Firebase · Supabase · custom backend    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -206,17 +267,27 @@ SwiftGraphDB does not try to replace SQLite for relational data. It uses SQLite 
 | Swift-first API | Yes | No | Yes | Binding-dependent | Driver-dependent |
 | Graph traversal API | Native | Manual / recursive SQL | Object graph oriented | Native | Native |
 | External runtime | No | No | No | Native library | JVM / server |
-| CloudKit sync | Optional module | Manual | NSPersistentCloudKitContainer | No | No |
+| Pluggable sync protocol | Yes | Manual | CloudKit-specific option | No | Server-managed |
+| CloudKit required | No | No | No | No | No |
 | Best fit | Apple app graph traversal | Tables and SQL | App models and persistence | Larger analytical graph workloads | Multi-user server graph apps |
 
 ---
 
 ## Requirements
 
+Core package:
+
 - Swift 6.0+
-- iOS 17.0+ / macOS 14.0+
+- iOS 16.0+ / macOS 13.0+ target recommended
 - Xcode 16.0+
-- CloudKit sync requires iCloud and CloudKit entitlements
+- SQLite available through the platform
+
+CloudKit adapter package:
+
+- iOS 17.0+ / macOS 14.0+ when using `CKSyncEngine`
+- CloudKit entitlements
+- an active iCloud account on the user's device
+- a configured CloudKit container
 
 ---
 
@@ -231,82 +302,87 @@ dependencies: [
 ]
 ```
 
-Then add `SwiftGraphDB` to the target that uses it.
+CloudKit adapter, when published:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/oomool/SwiftGraphDBCloudKit", from: "0.1.0")
+]
+```
 
 ### Xcode
 
-File → Add Package Dependencies → enter the repository URL.
+File → Add Package Dependencies → enter repository URL.
 
 ---
 
 ## Roadmap
 
-### Core engine
+### Core graph engine
 
 - [x] Property graph model
 - [x] Node and edge CRUD
-- [x] Basic local traversal
-- [x] SQLite-backed local persistence
-- [ ] Stable public API review
-- [ ] Expanded traversal test suite
-- [ ] Benchmark fixtures and reproducible measurements
-
-### Storage and performance
-
+- [x] Local traversal API
+- [x] SQLite persistence
 - [ ] CSR traversal optimization
-- [ ] EdgeLog compaction policy
-- [ ] Optional property indexes
-- [ ] Bulk import API
+- [ ] EdgeLog compaction tuning
 - [ ] Launch snapshot format
+- [ ] Property index declaration API
+- [ ] Benchmark datasets
 
-### Optional sync
+### Sync protocol
 
-- [ ] CloudKit module boundary
-- [ ] CKSyncEngine integration
-- [ ] Field-level conflict resolution tests
-- [ ] Large initial sync batching
-- [ ] Offline sync recovery tests
+- [x] Change journal design
+- [x] Backend-agnostic `GraphSyncTransport` shape
+- [x] Conflict resolver API shape
+- [ ] Sync adapter contract tests
+- [ ] Tombstone retention policy
+- [ ] Partial sync / subgraph sync design
 
-### Future exploration
+### Adapter packages
 
-- [ ] Typed schema layer
-- [ ] Additional path query APIs
-- [ ] Subgraph extraction
-- [ ] Optional Cypher-compatible frontend package
+- [ ] `SwiftGraphDBCloudKit` reference adapter
+- [ ] REST reference adapter
+- [ ] Firebase / Supabase design notes
 
 ---
 
 ## Contributing
 
-Contributions are welcome, especially in areas that make the project easier to trust and easier to adopt.
+SwiftGraphDB is intended to be usable before public launch, but the API and internals are still evolving. Contributions are welcome.
 
 Good first issues:
 
 - Add traversal correctness tests
-- Add persistence round-trip tests
-- Improve Quick Start examples
-- Add small benchmark datasets
-- Improve error messages and diagnostics
-- Document real-world app use cases
-- Add examples for common graph models
+- Add benchmark fixtures for common app-sized graphs
+- Improve `PropertyValue` Codable round-trip coverage
+- Improve query builder examples
+- Improve error messages
+- Add sync transport contract tests using an in-memory fake backend
 
-For larger changes, please open a GitHub Discussion first. Storage layout, sync behavior, public API shape, and performance contracts should be discussed before implementation.
+Design discussions:
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [SPEC.md](SPEC.md) before starting substantial work.
+- Open a GitHub Discussion before submitting large PRs.
+- Backend adapters should not add dependencies to the core package.
+- Sync-related changes should preserve the `GraphSyncTransport` boundary.
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md), [SPEC.md](SPEC.md), and [CHANGELOG.md](CHANGELOG.md) before starting work.
 
 ---
 
-## Academic References
+## Design References
 
-SwiftGraphDB's architecture is informed by database systems work on graph storage, adjacency layout, write buffering, and concurrency:
+SwiftGraphDB's design is influenced by graph database storage research and local-first sync systems:
 
-- **Kùzu** (CIDR 2023) — columnar node storage and CSR-style graph processing
-- **LiveGraph** (VLDB 2020) — transactional edge log for graph storage
-- **LSMGraph** (SIGMOD 2024) — write-optimized dynamic graph storage
-- **A+ Indexes** (VLDB 2020) — tunable adjacency-list index design
-- **Columnar Storage for GDBMSs** (VLDB 2021) — property/topology separation
-- **MVCC Empirical Evaluation** (VLDB 2017) — concurrency tradeoffs for read-heavy workloads
-- **CloudKit** (VLDB 2018) — structured cloud storage for mobile applications
+- **Kùzu** — columnar graph storage and CSR-style adjacency
+- **LiveGraph** — transactional edge log design
+- **LSMGraph** — write buffer plus read-optimized adjacency structures
+- **A+ Indexes** — tunable adjacency list indexing
+- **Automerge Repo** — pluggable storage and networking adapters
+- **Yjs** — provider-based sync and persistence ecosystem
+- **Replicache** — local-first push/pull sync contract
+- **RxDB** — backend-independent replication with client-side conflict handling
+- **CloudKit / CKSyncEngine** — Apple-specific reference backend for private user sync
 
 ---
 
@@ -318,5 +394,8 @@ Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## Status
 
-SwiftGraphDB is a usable local engine moving toward a stable public API. The repository should be opened only with working examples, passing tests, and a clearly marked boundary between core functionality and experimental modules.
+🟡 **Usable local engine / evolving public API** — The core database is designed to work locally without sync. Backend-agnostic sync protocol support is being specified. CloudKit belongs in a separate adapter package.
 
+---
+
+*Built with care for the Apple developer community.*
