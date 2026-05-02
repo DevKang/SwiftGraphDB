@@ -26,6 +26,11 @@ public actor GraphActor {
     private var revisionCounter: Int64 = 0
     /// Local actor identity, hydrated lazily from `db_meta.actor_id` on first revision mint.
     private var actorIDCache: ActorID?
+    /// Bounded LRU cache for decoded `[String: PropertyValue]` dictionaries. Invalidated on
+    /// update / delete so reads never see stale property data.
+    private var propertyCache: LRUCache<NodeID, [String: PropertyValue]>
+    private var propertyCacheHits: Int = 0
+    private var propertyCacheMisses: Int = 0
     /// Local graph identity, hydrated lazily from `db_meta.graph_id`. Stamped onto every
     /// `change_journal` row so adapters can attribute changes to the right store.
     private var graphIDCache: GraphID?
@@ -101,7 +106,11 @@ public actor GraphActor {
 
     // MARK: - Init
 
-    public init(store: SQLiteStore, propertyIndexSpecs: [PropertyIndexSpec] = []) async {
+    public init(
+        store: SQLiteStore,
+        propertyIndexSpecs: [PropertyIndexSpec] = [],
+        propertyCacheCapacity: Int = 10_000
+    ) async {
         self.store = store
         self.propertyIndexSpecs = propertyIndexSpecs
         self.nodeRepo = NodeRepository(store: store)
@@ -113,6 +122,30 @@ public actor GraphActor {
         self.edgeLog = EdgeLog()
         self.labelIndex = LabelIndex()
         self.propertyIndex = PropertyIndex(specs: propertyIndexSpecs)
+        self.propertyCache = LRUCache(capacity: max(1, propertyCacheCapacity))
+    }
+
+    /// Cached property fetch. The graph actor is the only writer; cache invalidation happens
+    /// inside the write transaction so a successful read sees the same state SQLite has.
+    public func cachedProperties(for id: NodeID) throws -> [String: PropertyValue]? {
+        if let hit = propertyCache.get(id) {
+            propertyCacheHits += 1
+            return hit
+        }
+        propertyCacheMisses += 1
+        guard let node = try nodeRepo.fetch(id: id) else { return nil }
+        propertyCache.put(id, node.properties)
+        return node.properties
+    }
+
+    public func clearPropertyCache() {
+        propertyCache.removeAll()
+        propertyCacheHits = 0
+        propertyCacheMisses = 0
+    }
+
+    public var propertyCacheStats: (hits: Int, misses: Int) {
+        (propertyCacheHits, propertyCacheMisses)
     }
 
     /// Hydrate state from a `RebuildFromSQLite.Result`. Used by `GraphStore.open` and by the
@@ -247,6 +280,7 @@ public actor GraphActor {
             try inMemoryOrFail {
                 let merged = existing.with(properties: properties)
                 self.propertyIndex.update(from: existing, to: merged)
+                self.propertyCache.remove(existing.id)
             }
         } catch {
             try await rebuild()
@@ -307,6 +341,7 @@ public actor GraphActor {
             try inMemoryOrFail {
                 self.labelIndex.remove(id, label: existing.label)
                 self.propertyIndex.delete(existing)
+                self.propertyCache.remove(id)
                 if let i = self.indexMap.internalIndex(for: id) {
                     self.indexMap.release(i)
                 }
