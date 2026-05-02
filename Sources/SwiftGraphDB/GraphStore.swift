@@ -31,7 +31,9 @@ public final class GraphStore: Sendable {
 
     // MARK: - State
 
-    private let actor: GraphActor
+    /// The graph actor. `internal` so M8's `SyncCoordinator` can hand it to the resolver/loop;
+    /// app code interacts via `addNode` / `enableSync` / etc.
+    let actor: GraphActor
 
     private init(actor: GraphActor) {
         self.actor = actor

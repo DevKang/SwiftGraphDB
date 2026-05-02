@@ -167,6 +167,90 @@ public actor GraphActor {
         (propertyCacheHits, propertyCacheMisses)
     }
 
+    // MARK: - Sync coordinator helpers (M8)
+
+    /// Hand the coordinator a stamped `graphID`.
+    func graphIDForCoordinator() throws -> GraphID {
+        try graphID()
+    }
+
+    func fetchPayloadForCoordinator(kind: ChangeJournalRow.EntityKind, id: UUID) throws -> GraphRecordPayload? {
+        switch kind {
+        case .node:
+            guard let node = try nodeRepo.fetch(id: id) else { return nil }
+            return GraphRecordPayload(properties: node.properties, label: node.label)
+        case .edge:
+            guard let edge = try edgeRepo.fetch(id: id) else { return nil }
+            return GraphRecordPayload(
+                properties: edge.properties, type: edge.type,
+                fromID: edge.fromID, toID: edge.toID
+            )
+        }
+    }
+
+    func applyRemoteChangeForCoordinator(_ change: GraphChange) async throws {
+        switch (change.entity.kind, change.operation) {
+        case (.node, .upsert):
+            guard let payload = change.payload, let label = payload.label else { return }
+            if try nodeRepo.fetch(id: change.entity.id) != nil {
+                try await self.updateNode(id: change.entity.id, properties: payload.properties)
+            } else {
+                let node = Node(
+                    id: change.entity.id, label: label,
+                    properties: payload.properties,
+                    revision: change.revision
+                )
+                try store.transaction { _ in try nodeRepo.insert(node) }
+                _ = self.indexMap.intern(change.entity.id)
+                self.labelIndex.add(change.entity.id, label: label)
+                self.propertyIndex.insert(node)
+            }
+        case (.node, .delete):
+            // The remote actor's revision is what we want to stamp; for now reuse local mint
+            // since the public API is symmetric.
+            try await self.deleteNode(id: change.entity.id)
+        case (.edge, .upsert):
+            guard let payload = change.payload,
+                  let type = payload.type, let from = payload.fromID, let to = payload.toID
+            else { return }
+            if try edgeRepo.fetch(id: change.entity.id) != nil {
+                try await self.updateEdge(id: change.entity.id, properties: payload.properties)
+            } else {
+                let edge = Edge(
+                    id: change.entity.id, type: type, fromID: from, toID: to,
+                    properties: payload.properties, revision: change.revision
+                )
+                try store.transaction { _ in try edgeRepo.insert(edge) }
+                self.edgeLog.append(.init(
+                    edgeID: change.entity.id, fromID: from, toID: to, type: type,
+                    revision: change.revision, operation: .upsert
+                ))
+            }
+        case (.edge, .delete):
+            try await self.deleteEdge(id: change.entity.id)
+        }
+    }
+
+    func applyMergedPayloadForCoordinator(
+        kind: GraphEntityKind,
+        id: UUID,
+        payload: GraphRecordPayload
+    ) async throws {
+        switch kind {
+        case .node:
+            try await self.updateNode(id: id, properties: payload.properties)
+        case .edge:
+            try await self.updateEdge(id: id, properties: payload.properties)
+        }
+    }
+
+    func deleteForCoordinator(kind: GraphEntityKind, id: UUID) async throws {
+        switch kind {
+        case .node: try await self.deleteNode(id: id)
+        case .edge: try await self.deleteEdge(id: id)
+        }
+    }
+
     /// Hydrate state from a `RebuildFromSQLite.Result`. Used by `GraphStore.open` and by the
     /// actor's drift-recovery path.
     public func loadRebuildResult(_ result: RebuildFromSQLite.Result) {
@@ -185,7 +269,7 @@ public actor GraphActor {
         let id = IDFactory.live.nodeID()
         let revision = try mintRevision()
         let node = Node(id: id, label: label, properties: properties, revision: revision)
-        let payload = try PropertyCoding.encode(properties)
+        let payload = try JSONEncoder().encode(GraphRecordPayload(properties: properties, label: label))
         let graphID = try graphID()
 
         try sqliteOrFail {
@@ -229,11 +313,9 @@ public actor GraphActor {
         let revision = try mintRevision()
         let edge = Edge(id: edgeID, type: type, fromID: from, toID: to,
                         properties: properties, revision: revision)
-        let payload = try PropertyCoding.encode([
-            "__from": .string(from.uuidString),
-            "__to": .string(to.uuidString),
-            "__type": .string(type),
-        ].merging(properties) { _, new in new })
+        let payload = try JSONEncoder().encode(GraphRecordPayload(
+            properties: properties, type: type, fromID: from, toID: to
+        ))
         let graphID = try graphID()
 
         try sqliteOrFail {
@@ -275,7 +357,7 @@ public actor GraphActor {
         }
         let revision = try mintRevision()
         let merged = existing.with(properties: properties).properties
-        let payload = try PropertyCoding.encode(merged)
+        let payload = try JSONEncoder().encode(GraphRecordPayload(properties: merged, label: existing.label))
         let graphID = try graphID()
         try sqliteOrFail {
             try store.transaction { _ in
@@ -312,7 +394,10 @@ public actor GraphActor {
         }
         let revision = try mintRevision()
         let merged = existing.with(properties: properties).properties
-        let payload = try PropertyCoding.encode(merged)
+        let payload = try JSONEncoder().encode(GraphRecordPayload(
+            properties: merged, type: existing.type,
+            fromID: existing.fromID, toID: existing.toID
+        ))
         let graphID = try graphID()
         try sqliteOrFail {
             try store.transaction { _ in
