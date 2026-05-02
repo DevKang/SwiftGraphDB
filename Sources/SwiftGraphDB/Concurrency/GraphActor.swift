@@ -375,6 +375,8 @@ public actor GraphActor {
         propertyIndex.nodes(label: label, property: property, equals: value)
     }
 
+    public var propertyIndexCopy: PropertyIndex { propertyIndex }
+
     public var unsafeStoreForTests: SQLiteStore { store }
 
     public struct InternalSnapshot: Sendable {

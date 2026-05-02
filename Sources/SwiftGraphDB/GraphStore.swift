@@ -134,6 +134,15 @@ public final class GraphStore: Sendable {
         await actor.propertyIndexNodes(label: label, property: property, equals: value)
     }
 
+    /// Internal accessor used by the query layer to fetch properties. Not for app use.
+    @_spi(Internal) public var storeForQueriesUnsafe: SQLiteStore {
+        get async { await actor.unsafeStoreForTests }
+    }
+
+    @_spi(Internal) public var propertyIndexForQueriesUnsafe: PropertyIndex {
+        get async { await actor.propertyIndexCopy }
+    }
+
     // MARK: - URL resolution
 
     private static func resolveURL(named name: String, options: Options) throws -> URL {
