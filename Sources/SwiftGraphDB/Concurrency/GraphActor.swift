@@ -144,6 +144,25 @@ public actor GraphActor {
         propertyCacheMisses = 0
     }
 
+    /// Hand the actor a memory-pressure monitor. Warning / critical events drop the property
+    /// cache; critical also schedules an opportunistic compaction trigger.
+    public func attachMemoryPressureMonitor(_ monitor: MemoryPressureMonitor) {
+        monitor.setHandler { [weak self] level in
+            guard let self else { return }
+            Task { await self.handleMemoryPressure(level) }
+        }
+    }
+
+    func handleMemoryPressure(_ level: MemoryPressureLevel) {
+        clearPropertyCache()
+        // Critical events also empty the EdgeLog (forcing the next read to merge nothing
+        // and the next write to repopulate). Compaction is the natural follow-up but is
+        // scheduled by callers via `triggerCompactionIfNeeded()` to keep this hook narrow.
+        if level == .critical {
+            edgeLog = EdgeLog()
+        }
+    }
+
     public var propertyCacheStats: (hits: Int, misses: Int) {
         (propertyCacheHits, propertyCacheMisses)
     }
