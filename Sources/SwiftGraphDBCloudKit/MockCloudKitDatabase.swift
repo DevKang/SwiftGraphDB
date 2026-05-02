@@ -11,9 +11,13 @@ public actor MockCloudKitDatabase: CloudKitDatabase {
     private var queuedConflicts: [(record: CloudKitRecord, serverRecord: CloudKitRecord)] = []
     private var nextSaveError: CloudKitTransportError?
     private var nextFetchError: CloudKitTransportError?
+    /// FIFO queue of errors to throw on consecutive `modify` calls. Each call consumes one entry.
+    private var saveErrorQueue: [CloudKitTransportError] = []
 
     private(set) var lastSaveCallSavedRecords: [CloudKitRecord] = []
     private(set) var lastSaveCallDeletedIDs: [CloudKitRecordID] = []
+    private(set) var saveCallSavedHistory: [[CloudKitRecord]] = []
+    public var saveCallCount: Int { saveCallSavedHistory.count }
 
     public init(zoneName: String = SwiftGraphDBCloudKit.zoneName) {
         self.zoneName = zoneName
@@ -37,6 +41,12 @@ public actor MockCloudKitDatabase: CloudKitDatabase {
         nextSaveError = error
     }
 
+    /// Queue errors to throw on the next N `modify` calls. Each modify call consumes the
+    /// head of the queue; once empty, modify proceeds normally.
+    public func queueSaveErrors(_ errors: [CloudKitTransportError]) {
+        saveErrorQueue.append(contentsOf: errors)
+    }
+
     public func setNextFetchError(_ error: CloudKitTransportError) {
         nextFetchError = error
     }
@@ -49,6 +59,11 @@ public actor MockCloudKitDatabase: CloudKitDatabase {
     ) async throws -> CloudKitModifyResult {
         lastSaveCallSavedRecords = savingRecords
         lastSaveCallDeletedIDs = deletingRecordIDs
+        saveCallSavedHistory.append(savingRecords)
+        if !saveErrorQueue.isEmpty {
+            let err = saveErrorQueue.removeFirst()
+            throw err
+        }
         if let err = nextSaveError {
             nextSaveError = nil
             throw err
