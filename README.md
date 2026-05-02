@@ -70,31 +70,33 @@ The public API may still change before `1.0`. See [SPEC.md](SPEC.md) for design 
 import SwiftGraphDB
 
 // Open or create a local graph store.
-let graph = try await GraphStore.open(at: .applicationSupport("MyGraph"))
+let graph = try await GraphStore.open(named: "MyGraph")
 
 // Insert nodes.
 let alice = try await graph.addNode(label: "Person", properties: [
-    "name": .string("Alice"),
+    "name": "Alice",
     "age": .int(32)
 ])
-
 let bob = try await graph.addNode(label: "Person", properties: [
-    "name": .string("Bob"),
+    "name": "Bob",
     "age": .int(28)
 ])
 
 // Insert a directed edge.
-try await graph.addEdge(from: alice, to: bob, type: "KNOWS", properties: [
+_ = try await graph.addEdge(from: alice, to: bob, type: "KNOWS", properties: [
     "since": .int(2021)
 ])
 
 // Traverse the graph.
 let friends = try await graph
     .nodes(labeled: "Person")
-    .where("name", equals: .string("Alice"))
-    .traverse(.outgoing, edge: "KNOWS", maxDepth: 2)
+    .where("name", equals: "Alice")
+    .traverse(.outgoing, edge: "KNOWS", maxDepth: .bounded(2))
     .collect()
 ```
+
+For a full SwiftUI sample exercising CRUD, queries, traversal, and the in-memory sync API end
+to end, see [`Examples/QuickStart`](Examples/QuickStart).
 
 ---
 
