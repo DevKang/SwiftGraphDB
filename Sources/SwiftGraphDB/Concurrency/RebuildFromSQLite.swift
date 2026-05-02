@@ -18,6 +18,10 @@ public enum RebuildFromSQLite {
         public var reverse: CSRAdjacency
         public var labelIndex: LabelIndex
         public var propertyIndex: PropertyIndex
+        /// Next counter the local actor should use when minting revisions. Equal to
+        /// `MAX(counter for revisions whose actorID == localActorID) + 1` across the
+        /// node/edge tables and the change journal, or `1` for fresh stores.
+        public var nextCounterForLocalActor: Int64
     }
 
     public enum ProgressEvent: Sendable {
@@ -124,12 +128,53 @@ public enum RebuildFromSQLite {
         let forward = CSRAdjacency(nodeCount: nodeCount, edges: forwardFlat)
         let reverse = CSRAdjacency(nodeCount: nodeCount, edges: reverseFlat)
 
+        // Compute the next counter for the local actor.
+        let nextCounter = try computeNextCounter(store: store)
+
         return Result(
             indexMap: indexMap,
             forward: forward,
             reverse: reverse,
             labelIndex: labelIndex,
-            propertyIndex: propertyIndex
+            propertyIndex: propertyIndex,
+            nextCounterForLocalActor: nextCounter
         )
+    }
+
+    /// Single-pass scan that computes `MAX(counter)` for the local actor across the change
+    /// journal, then returns `max + 1`. Falls back to `1` for fresh stores.
+    static func computeNextCounter(store: SQLiteStore) throws -> Int64 {
+        // Read local actor.
+        let actorRows = try store.query(
+            "SELECT value FROM db_meta WHERE key = ?", [.text("actor_id")]
+        ) { $0.text(at: 0) }
+        guard let actorString = actorRows.first.flatMap({ $0 }) else { return 1 }
+
+        var maxCounter: Int64 = 0
+        let cjRows = try store.query(
+            "SELECT revision FROM change_journal WHERE actor_id = ?",
+            [.text(actorString)]
+        ) { $0.text(at: 0) }
+        let decoder = JSONDecoder()
+        for json in cjRows {
+            if let json, let data = json.data(using: .utf8),
+               let r = try? decoder.decode(GraphRevision.self, from: data) {
+                maxCounter = max(maxCounter, r.counter)
+            }
+        }
+        // Also scan entity tables in case a v1→v2 backfill seeded counters without a
+        // matching journal row.
+        for table in ["nodes", "edges"] {
+            let rows = try store.query("SELECT revision FROM \(table)") { $0.text(at: 0) }
+            for raw in rows {
+                if let json = raw, json.contains(actorString),
+                   let data = json.data(using: .utf8),
+                   let r = try? decoder.decode(GraphRevision.self, from: data),
+                   r.actorID.uuidString == actorString {
+                    maxCounter = max(maxCounter, r.counter)
+                }
+            }
+        }
+        return maxCounter + 1
     }
 }
