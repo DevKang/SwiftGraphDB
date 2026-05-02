@@ -30,6 +30,52 @@ public struct NodeQuery: Sendable {
             stages: stages + [stage]
         )
     }
+
+    // MARK: - Filter operations (SPEC §7)
+
+    /// Equality filter on a property.
+    public func `where`(_ key: String, equals value: PropertyValue) -> NodeQuery {
+        appending(.filterPredicate(NodeFilter { $0.properties[key] == value }))
+    }
+
+    public func `where`(_ key: String, greaterThan value: PropertyValue) -> NodeQuery {
+        appending(.filterPredicate(NodeFilter {
+            guard let v = $0.properties[key] else { return false }
+            return GraphStore.compare(v, value) == .greater
+        }))
+    }
+
+    public func `where`(_ key: String, lessThan value: PropertyValue) -> NodeQuery {
+        appending(.filterPredicate(NodeFilter {
+            guard let v = $0.properties[key] else { return false }
+            return GraphStore.compare(v, value) == .less
+        }))
+    }
+
+    public func `where`(_ key: String, in values: [PropertyValue]) -> NodeQuery {
+        let set = Set(values)
+        return appending(.filterPredicate(NodeFilter {
+            guard let v = $0.properties[key] else { return false }
+            return set.contains(v)
+        }))
+    }
+
+    /// Escape-hatch predicate. Disables index optimisation; the executor materialises every
+    /// candidate node and runs the closure.
+    public func `where`(_ predicate: @escaping @Sendable (Node) -> Bool) -> NodeQuery {
+        appending(.filterPredicate(NodeFilter(predicate)))
+    }
+
+    // MARK: - Traversal (SPEC §7.4)
+
+    /// BFS over `direction`, optionally filtered by edge `type`. Default `maxDepth = 1`.
+    public func traverse(
+        _ direction: TraverseDirection,
+        edge: String? = nil,
+        maxDepth: TraverseDepth = .bounded(1)
+    ) -> NodeQuery {
+        appending(.traverse(direction: direction, edge: edge, maxDepth: maxDepth))
+    }
 }
 
 /// Direction of a traversal step.
