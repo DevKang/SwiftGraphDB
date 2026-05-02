@@ -21,8 +21,8 @@ public struct EdgeRepository: Sendable {
         let blob = try PropertyCoding.encode(edge.properties)
         try store.execute(
             """
-            INSERT INTO edges (id, type, from_id, to_id, properties, created_at, modified_at, is_deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            INSERT INTO edges (id, type, from_id, to_id, properties, created_at, modified_at, is_deleted, revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
             """,
             [
                 .text(edge.id.uuidString),
@@ -32,6 +32,7 @@ public struct EdgeRepository: Sendable {
                 .blob(blob),
                 .real(edge.createdAt.timeIntervalSince1970),
                 .real(edge.modifiedAt.timeIntervalSince1970),
+                .text(try NodeRepository.encodeRevision(edge.revision)),
             ]
         )
     }
@@ -41,7 +42,7 @@ public struct EdgeRepository: Sendable {
     public func fetch(id: EdgeID) throws -> Edge? {
         try store.query(
             """
-            SELECT id, type, from_id, to_id, properties, created_at, modified_at
+            SELECT id, type, from_id, to_id, properties, created_at, modified_at, revision, is_deleted
             FROM edges
             WHERE id = ? AND is_deleted = 0
             """,
@@ -62,7 +63,7 @@ public struct EdgeRepository: Sendable {
     public func fetchAll(type: String) throws -> [Edge] {
         try store.query(
             """
-            SELECT id, type, from_id, to_id, properties, created_at, modified_at
+            SELECT id, type, from_id, to_id, properties, created_at, modified_at, revision, is_deleted
             FROM edges
             WHERE type = ? AND is_deleted = 0
             """,
@@ -72,7 +73,8 @@ public struct EdgeRepository: Sendable {
 
     // MARK: - Update
 
-    public func update(id: EdgeID, properties patch: [String: PropertyValue]) throws {
+    public func update(id: EdgeID, properties patch: [String: PropertyValue], revision: GraphRevision) throws {
+        try NodeRepository.requireRealRevision(revision)
         guard let existing = try fetch(id: id) else {
             throw RepositoryError.notFound(id: id.uuidString)
         }
@@ -82,12 +84,13 @@ public struct EdgeRepository: Sendable {
         try store.execute(
             """
             UPDATE edges
-            SET properties = ?, modified_at = ?
+            SET properties = ?, modified_at = ?, revision = ?
             WHERE id = ? AND is_deleted = 0
             """,
             [
                 .blob(blob),
                 .real(Date().timeIntervalSince1970),
+                .text(try NodeRepository.encodeRevision(revision)),
                 .text(id.uuidString),
             ]
         )
@@ -95,15 +98,17 @@ public struct EdgeRepository: Sendable {
 
     // MARK: - Delete (soft)
 
-    public func delete(id: EdgeID) throws {
+    public func delete(id: EdgeID, revision: GraphRevision) throws {
+        try NodeRepository.requireRealRevision(revision)
         try store.execute(
             """
             UPDATE edges
-            SET is_deleted = 1, modified_at = ?
+            SET is_deleted = 1, modified_at = ?, revision = ?
             WHERE id = ?
             """,
             [
                 .real(Date().timeIntervalSince1970),
+                .text(try NodeRepository.encodeRevision(revision)),
                 .text(id.uuidString),
             ]
         )
@@ -115,7 +120,7 @@ public struct EdgeRepository: Sendable {
         if let type {
             return try store.query(
                 """
-                SELECT id, type, from_id, to_id, properties, created_at, modified_at
+                SELECT id, type, from_id, to_id, properties, created_at, modified_at, revision, is_deleted
                 FROM edges
                 WHERE \(column) = ? AND type = ? AND is_deleted = 0
                 """,
@@ -124,7 +129,7 @@ public struct EdgeRepository: Sendable {
         } else {
             return try store.query(
                 """
-                SELECT id, type, from_id, to_id, properties, created_at, modified_at
+                SELECT id, type, from_id, to_id, properties, created_at, modified_at, revision, is_deleted
                 FROM edges
                 WHERE \(column) = ? AND is_deleted = 0
                 """,
@@ -154,6 +159,15 @@ public struct EdgeRepository: Sendable {
         else {
             throw RepositoryError.malformedRow
         }
+        let revisionJSON = row.text(at: 7)
+        let isDeleted = (row.int(at: 8) ?? 0) != 0
+        let revision: GraphRevision
+        if let revisionJSON, let data = revisionJSON.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(GraphRevision.self, from: data) {
+            revision = decoded
+        } else {
+            revision = GraphRevision.placeholder(wallClock: Date(timeIntervalSince1970: modifiedAtRaw))
+        }
         return Edge(
             id: id,
             type: type,
@@ -161,7 +175,9 @@ public struct EdgeRepository: Sendable {
             toID: toID,
             properties: try PropertyCoding.decode(blob),
             createdAt: Date(timeIntervalSince1970: createdAtRaw),
-            modifiedAt: Date(timeIntervalSince1970: modifiedAtRaw)
+            modifiedAt: Date(timeIntervalSince1970: modifiedAtRaw),
+            revision: revision,
+            isDeleted: isDeleted
         )
     }
 }

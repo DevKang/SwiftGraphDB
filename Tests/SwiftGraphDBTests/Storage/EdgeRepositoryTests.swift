@@ -2,6 +2,13 @@ import XCTest
 @testable import SwiftGraphDB
 
 final class EdgeRepositoryTests: XCTestCase {
+    private let testActor = ActorID()
+    private var counter: Int64 = 0
+    private func nextRev() -> GraphRevision {
+        counter += 1
+        return GraphRevision(actorID: testActor, counter: counter, wallClock: Date())
+    }
+
 
     // MARK: - Insert + fetch
 
@@ -104,7 +111,7 @@ final class EdgeRepositoryTests: XCTestCase {
         let edge = Edge(type: "KNOWS", fromID: a, toID: b)
         try edges.insert(edge)
 
-        try edges.delete(id: edge.id)
+        try edges.delete(id: edge.id, revision: nextRev())
 
         XCTAssertEqual(try edges.fetchOutgoing(from: a, type: nil).count, 0)
         XCTAssertEqual(try edges.fetchIncoming(to: b, type: nil).count, 0)

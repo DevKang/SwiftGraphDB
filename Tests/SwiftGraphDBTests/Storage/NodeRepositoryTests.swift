@@ -2,6 +2,13 @@ import XCTest
 @testable import SwiftGraphDB
 
 final class NodeRepositoryTests: XCTestCase {
+    private let testActor = ActorID()
+    private var counter: Int64 = 0
+    private func nextRev() -> GraphRevision {
+        counter += 1
+        return GraphRevision(actorID: testActor, counter: counter, wallClock: Date())
+    }
+
 
     // MARK: - Insert + fetch
 
@@ -54,7 +61,7 @@ final class NodeRepositoryTests: XCTestCase {
         try repo.insert(alice)
         try repo.insert(Node(label: "Person", properties: ["name": "Bob"]))
 
-        try repo.delete(id: alice.id)
+        try repo.delete(id: alice.id, revision: nextRev())
 
         let people = try repo.fetchAll(label: "Person")
         XCTAssertEqual(people.count, 1)
@@ -70,7 +77,7 @@ final class NodeRepositoryTests: XCTestCase {
         try repo.insert(original)
 
         Thread.sleep(forTimeInterval: 0.01)
-        try repo.update(id: original.id, properties: ["age": 33, "email": "a@example.com"])
+        try repo.update(id: original.id, properties: ["age": 33, "email": "a@example.com"], revision: nextRev())
 
         let updated = try repo.fetch(id: original.id)!
         XCTAssertEqual(updated.properties["name"], "Alice")
@@ -87,7 +94,7 @@ final class NodeRepositoryTests: XCTestCase {
         let n = Node(label: "Person", properties: ["name": "Alice"])
         try repo.insert(n)
 
-        try repo.delete(id: n.id)
+        try repo.delete(id: n.id, revision: nextRev())
 
         XCTAssertNil(try repo.fetch(id: n.id))
     }

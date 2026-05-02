@@ -23,6 +23,23 @@ public actor GraphActor {
     private let edgeRepo: EdgeRepository
     private let propertyIndexSpecs: [PropertyIndexSpec]
     private var failureMode: FailureMode = .none
+    private var revisionCounter: Int64 = 0
+    /// Local actor identity, hydrated lazily from `db_meta.actor_id` on first revision mint.
+    private var actorIDCache: ActorID?
+
+    private func mintRevision() throws -> GraphRevision {
+        if actorIDCache == nil {
+            let rows = try store.query(
+                "SELECT value FROM db_meta WHERE key = ?", [.text("actor_id")]
+            ) { $0.text(at: 0) }
+            guard let value = rows.first.flatMap({ $0 }), let parsed = ActorID(uuidString: value) else {
+                throw GraphActorError.actorIDMissing
+            }
+            actorIDCache = parsed
+        }
+        revisionCounter += 1
+        return GraphRevision(actorID: actorIDCache!, counter: revisionCounter, wallClock: Date())
+    }
 
     /// Test-only injection point. Production code never sets this.
     public enum FailureMode: Sendable, Equatable {
@@ -65,7 +82,8 @@ public actor GraphActor {
     @discardableResult
     public func addNode(label: String, properties: [String: PropertyValue]) async throws -> NodeID {
         let id = IDFactory.live.nodeID()
-        let node = Node(id: id, label: label, properties: properties)
+        let revision = try mintRevision()
+        let node = Node(id: id, label: label, properties: properties, revision: revision)
 
         try sqliteOrFail { try nodeRepo.insert(node) }
         do {
@@ -88,14 +106,16 @@ public actor GraphActor {
         properties: [String: PropertyValue]
     ) async throws -> EdgeID {
         let edgeID = IDFactory.live.edgeID()
-        let edge = Edge(id: edgeID, type: type, fromID: from, toID: to, properties: properties)
+        let revision = try mintRevision()
+        let edge = Edge(id: edgeID, type: type, fromID: from, toID: to,
+                        properties: properties, revision: revision)
 
         try sqliteOrFail { try edgeRepo.insert(edge) }
         do {
             try inMemoryOrFail {
                 self.edgeLog.append(.init(
                     edgeID: edgeID, fromID: from, toID: to, type: type,
-                    revision: GraphRevision.placeholder(wallClock: Date()),
+                    revision: revision,
                     operation: .upsert
                 ))
             }
@@ -110,7 +130,8 @@ public actor GraphActor {
         guard let existing = try nodeRepo.fetch(id: id) else {
             throw RepositoryError.notFound(id: id.uuidString)
         }
-        try sqliteOrFail { try nodeRepo.update(id: id, properties: properties) }
+        let revision = try mintRevision()
+        try sqliteOrFail { try nodeRepo.update(id: id, properties: properties, revision: revision) }
         do {
             try inMemoryOrFail {
                 let merged = existing.with(properties: properties)
@@ -122,13 +143,15 @@ public actor GraphActor {
     }
 
     public func updateEdge(id: EdgeID, properties: [String: PropertyValue]) async throws {
-        try sqliteOrFail { try edgeRepo.update(id: id, properties: properties) }
+        let revision = try mintRevision()
+        try sqliteOrFail { try edgeRepo.update(id: id, properties: properties, revision: revision) }
         // No in-memory edge property cache yet; nothing to update.
     }
 
     public func deleteNode(id: NodeID) async throws {
         guard let existing = try nodeRepo.fetch(id: id) else { return }
-        try sqliteOrFail { try nodeRepo.delete(id: id) }
+        let revision = try mintRevision()
+        try sqliteOrFail { try nodeRepo.delete(id: id, revision: revision) }
         do {
             try inMemoryOrFail {
                 self.labelIndex.remove(id, label: existing.label)
@@ -144,13 +167,14 @@ public actor GraphActor {
 
     public func deleteEdge(id: EdgeID) async throws {
         guard let existing = try edgeRepo.fetch(id: id) else { return }
-        try sqliteOrFail { try edgeRepo.delete(id: id) }
+        let revision = try mintRevision()
+        try sqliteOrFail { try edgeRepo.delete(id: id, revision: revision) }
         do {
             try inMemoryOrFail {
                 self.edgeLog.append(.init(
                     edgeID: id, fromID: existing.fromID, toID: existing.toID,
                     type: existing.type,
-                    revision: GraphRevision.placeholder(wallClock: Date()),
+                    revision: revision,
                     operation: .delete
                 ))
             }
@@ -225,4 +249,7 @@ public actor GraphActor {
 public enum GraphActorError: Error, Equatable {
     case injectedSQLiteFailure
     case injectedInMemoryFailure
+    /// `db_meta.actor_id` was missing when the actor tried to mint a revision. Migration #2
+    /// always stamps it; reaching this means migrations weren't run.
+    case actorIDMissing
 }
