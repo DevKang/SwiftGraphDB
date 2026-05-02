@@ -131,6 +131,7 @@ public func measureBenchmark<T>(
     return (output, record)
 }
 
+/// Run an async closure under the benchmark harness, capturing wall-clock and warmup metrics.
 public func measureBenchmarkAsync<T>(
     _ name: String,
     scenario: String,

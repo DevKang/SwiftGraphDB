@@ -130,6 +130,7 @@ public struct BulkImporter: Sendable {
     }
 }
 
+/// Errors thrown by `BulkImporter` while validating or persisting a batch.
 public enum BulkImporterError: Error, Equatable {
     /// Returned when a `Batch` is used after its `bulkInsert` closure has returned.
     case batchClosed

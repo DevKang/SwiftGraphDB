@@ -272,6 +272,7 @@ public protocol TransportClock: Sendable {
     func sleep(seconds: TimeInterval) async throws
 }
 
+/// Default `TransportClock` implementation backed by `Task.sleep`.
 public struct SystemTransportClock: TransportClock {
     public init() {}
     public func sleep(seconds: TimeInterval) async throws {

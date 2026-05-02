@@ -23,6 +23,7 @@ public struct GraphConflict: Sendable {
     }
 }
 
+/// The decision a `GraphConflictResolver` returns for a given conflict — keep one side, merge, delete, or fail.
 public enum GraphConflictResolution: Sendable {
     case useLocal
     case useRemote
@@ -31,12 +32,15 @@ public enum GraphConflictResolution: Sendable {
     case fail(String)
 }
 
+/// Decides what to do when a remote change conflicts with the current local state. Apps can supply custom
+/// implementations or use the three built-in resolvers.
 public protocol GraphConflictResolver: Sendable {
     func resolve(_ conflict: GraphConflict) async throws -> GraphConflictResolution
 }
 
 // MARK: - Built-in resolvers
 
+/// Conflict resolver that always accepts the remote payload, replacing local divergence.
 public struct RemoteWinsResolver: GraphConflictResolver {
     public init() {}
     public func resolve(_ conflict: GraphConflict) async throws -> GraphConflictResolution {
@@ -45,6 +49,7 @@ public struct RemoteWinsResolver: GraphConflictResolver {
     }
 }
 
+/// Conflict resolver that always keeps the local payload, ignoring the remote change.
 public struct LocalWinsResolver: GraphConflictResolver {
     public init() {}
     public func resolve(_ conflict: GraphConflict) async throws -> GraphConflictResolution {

@@ -14,6 +14,7 @@ public enum SyncRejectionReason: Sendable, Equatable, Codable {
     case permanent(String)
 }
 
+/// One rejection returned from `GraphSyncTransport.push`. Pairs the offending change ID with the reason.
 public struct SyncRejection: Sendable {
     public let changeID: ChangeID
     public let reason: SyncRejectionReason
@@ -36,6 +37,8 @@ public struct PushResult: Sendable {
     }
 }
 
+/// Result of `GraphSyncTransport.pull`: the changes the backend handed back, the new opaque cursor,
+/// and whether more changes are immediately available.
 public struct PullResult: Sendable {
     public let changes: [GraphChange]
     public let checkpoint: SyncCheckpoint

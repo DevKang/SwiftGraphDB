@@ -14,6 +14,7 @@ public protocol MemoryPressureMonitor: Sendable {
     func cancel()
 }
 
+/// Coarse memory-pressure tier reported by the system. Mirrors `DispatchSource.MemoryPressureEvent`.
 public enum MemoryPressureLevel: Sendable, Equatable {
     case warning
     case critical

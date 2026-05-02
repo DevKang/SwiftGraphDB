@@ -32,6 +32,7 @@ public enum RecordCodec {
     }
 }
 
+/// Errors raised by `RecordCodec` while encoding to or decoding from a `CloudKitRecord`.
 public enum RecordCodecError: Error, Equatable {
     case missingChangeField
     case unsupportedPayloadFormat(found: PayloadFormatVersion)
