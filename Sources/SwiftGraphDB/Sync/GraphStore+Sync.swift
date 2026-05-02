@@ -36,9 +36,29 @@ extension GraphStore {
             await registry.setStatus(.idle)
             return result
         } catch {
-            await registry.setStatus(.error(backendID, "\(error)"))
+            // Transient transport errors transition to .offline rather than .error so apps
+            // can keep accepting writes; permanent errors surface for app handling.
+            if isTransient(error) {
+                await registry.setStatus(.offline(backendID))
+            } else {
+                await registry.setStatus(.error(backendID, "\(error)"))
+            }
             throw error
         }
+    }
+
+    /// Detect transport-level transient errors so the registry can publish `.offline` rather
+    /// than `.error`. Adapters surface transient failures via `SyncRejectionReason.transient`
+    /// or by throwing a typed error containing "transient" semantics.
+    private func isTransient(_ error: Error) -> Bool {
+        if let coreError = error as? InMemorySyncError, coreError == .injectedTransient {
+            return true
+        }
+        // String-match URLError-style transient cases without importing the framework here.
+        let description = String(describing: error).lowercased()
+        return description.contains("transient")
+            || description.contains("offline")
+            || description.contains("network")
     }
 
     /// Cancel the registration. Persisted `sync_checkpoints` rows are kept so re-enabling
