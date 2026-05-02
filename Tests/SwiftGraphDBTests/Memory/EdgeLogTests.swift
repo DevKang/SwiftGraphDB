@@ -3,6 +3,12 @@ import XCTest
 
 final class EdgeLogTests: XCTestCase {
 
+    private let testActor = ActorID()
+
+    private func revision(_ counter: Int64, offset: TimeInterval = 0) -> GraphRevision {
+        GraphRevision(actorID: testActor, counter: counter, wallClock: Date().addingTimeInterval(offset))
+    }
+
     // MARK: - Append + iterate
 
     func testInsertedEntryAppearsInOutgoingAndIncoming() {
@@ -12,7 +18,7 @@ final class EdgeLogTests: XCTestCase {
         let edgeID = IDFactory.live.edgeID()
         log.append(EdgeLogEntry(
             edgeID: edgeID, fromID: from, toID: to, type: "KNOWS",
-            timestamp: Date(), operation: .insert
+            revision: revision(1), operation: .upsert
         ))
 
         XCTAssertEqual(Array(log.outgoingEntries(from: from)).map(\.edgeID), [edgeID])
@@ -22,13 +28,13 @@ final class EdgeLogTests: XCTestCase {
     func testSizeReflectsAppendedEntryCount() {
         var log = EdgeLog()
         XCTAssertEqual(log.size, 0)
-        for _ in 0..<5 {
+        for i in 0..<5 {
             log.append(.init(
                 edgeID: IDFactory.live.edgeID(),
                 fromID: IDFactory.live.nodeID(),
                 toID: IDFactory.live.nodeID(),
                 type: "L",
-                timestamp: Date(), operation: .insert
+                revision: revision(Int64(i + 1)), operation: .upsert
             ))
         }
         XCTAssertEqual(log.size, 5)
@@ -52,8 +58,8 @@ final class EdgeLogTests: XCTestCase {
                 edgeID: IDFactory.live.edgeID(), fromID: from,
                 toID: IDFactory.live.nodeID(),
                 type: "L",
-                timestamp: Date().addingTimeInterval(TimeInterval(i)),
-                operation: .insert
+                revision: revision(Int64(i + 1)),
+                operation: .upsert
             )
         }
         let merged = EdgeLog.merge(csrEdges: [], logEntries: entries)
@@ -73,13 +79,13 @@ final class EdgeLogTests: XCTestCase {
         ])
         let entries = [EdgeLogEntry(
             edgeID: killedEdgeID, fromID: from, toID: to, type: "L",
-            timestamp: Date(), operation: .delete
+            revision: revision(1), operation: .delete
         )]
         let merged = EdgeLog.merge(csrEdges: csrSlice, logEntries: entries)
         XCTAssertEqual(merged.map(\.edgeID), [keptEdgeID])
     }
 
-    func testSecondInsertOfSameEdgeIDReplacesFirst() {
+    func testSecondInsertOfSameEdgeIDReplacesFirstByCounter() {
         let from = IDFactory.live.nodeID()
         let to1 = IDFactory.live.nodeID()
         let to2 = IDFactory.live.nodeID()
@@ -87,9 +93,9 @@ final class EdgeLogTests: XCTestCase {
 
         let entries: [EdgeLogEntry] = [
             .init(edgeID: edgeID, fromID: from, toID: to1, type: "L",
-                  timestamp: Date(), operation: .insert),
+                  revision: revision(1), operation: .upsert),
             .init(edgeID: edgeID, fromID: from, toID: to2, type: "L",
-                  timestamp: Date().addingTimeInterval(1), operation: .insert),
+                  revision: revision(2), operation: .upsert),
         ]
 
         let merged = EdgeLog.merge(csrEdges: [], logEntries: entries)
@@ -104,15 +110,39 @@ final class EdgeLogTests: XCTestCase {
 
         let entries: [EdgeLogEntry] = [
             .init(edgeID: edgeID, fromID: from, toID: to, type: "L",
-                  timestamp: Date(), operation: .insert),
+                  revision: revision(1), operation: .upsert),
             .init(edgeID: edgeID, fromID: from, toID: to, type: "L",
-                  timestamp: Date().addingTimeInterval(1), operation: .delete),
+                  revision: revision(2, offset: 1), operation: .delete),
             .init(edgeID: edgeID, fromID: from, toID: to, type: "L",
-                  timestamp: Date().addingTimeInterval(2), operation: .insert),
+                  revision: revision(3, offset: 2), operation: .upsert),
         ]
 
         let merged = EdgeLog.merge(csrEdges: [], logEntries: entries)
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged.first?.edgeID, edgeID)
+    }
+
+    // MARK: - Cross-actor revision tiebreak
+
+    func testCrossActorMergePicksHighestRevisionByWallClock() {
+        let from = IDFactory.live.nodeID()
+        let to = IDFactory.live.nodeID()
+        let edgeID = IDFactory.live.edgeID()
+
+        let actorA = ActorID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let actorB = ActorID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let early = Date(timeIntervalSince1970: 100)
+        let late = Date(timeIntervalSince1970: 200)
+
+        let entries: [EdgeLogEntry] = [
+            .init(edgeID: edgeID, fromID: from, toID: to, type: "L",
+                  revision: GraphRevision(actorID: actorA, counter: 99, wallClock: early),
+                  operation: .upsert),
+            .init(edgeID: edgeID, fromID: from, toID: to, type: "L",
+                  revision: GraphRevision(actorID: actorB, counter: 1, wallClock: late),
+                  operation: .delete),
+        ]
+        let merged = EdgeLog.merge(csrEdges: [], logEntries: entries)
+        XCTAssertEqual(merged.count, 0, "later wallClock delete wins regardless of counter")
     }
 }

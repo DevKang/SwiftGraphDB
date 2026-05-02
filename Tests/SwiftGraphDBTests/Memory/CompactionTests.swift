@@ -3,6 +3,14 @@ import XCTest
 
 final class CompactionTests: XCTestCase {
 
+    private let testActor = ActorID()
+    private var counterSeed: Int64 = 0
+    private func nextRev(offset: TimeInterval = 0) -> GraphRevision {
+        counterSeed += 1
+        return GraphRevision(actorID: testActor, counter: counterSeed, wallClock: Date().addingTimeInterval(offset))
+    }
+
+
     // MARK: - Helpers
 
     private func emptyState(nodeCount: Int = 0) -> Compactor.State {
@@ -38,7 +46,7 @@ final class CompactionTests: XCTestCase {
         var log = EdgeLog()
         log.append(.init(
             edgeID: edge.id, fromID: edge.fromID, toID: edge.toID,
-            type: edge.type, timestamp: Date(), operation: .insert
+            type: edge.type, revision: nextRev(), operation: .upsert
         ))
 
         let state = Compactor.State(
@@ -74,7 +82,7 @@ final class CompactionTests: XCTestCase {
         var log = EdgeLog()
         log.append(.init(
             edgeID: edgeID, fromID: ids[0], toID: ids[1], type: "L",
-            timestamp: Date(), operation: .delete
+            revision: nextRev(), operation: .delete
         ))
 
         let after = Compactor.compact(.init(
@@ -93,11 +101,11 @@ final class CompactionTests: XCTestCase {
 
         var log = EdgeLog()
         log.append(.init(edgeID: edgeID, fromID: ids[0], toID: ids[1], type: "L",
-                         timestamp: Date(), operation: .insert))
+                         revision: nextRev(), operation: .upsert))
         log.append(.init(edgeID: edgeID, fromID: ids[0], toID: ids[1], type: "L",
-                         timestamp: Date().addingTimeInterval(1), operation: .delete))
+                         revision: nextRev(offset: 1), operation: .delete))
         log.append(.init(edgeID: edgeID, fromID: ids[0], toID: ids[1], type: "L",
-                         timestamp: Date().addingTimeInterval(2), operation: .insert))
+                         revision: nextRev(offset: 2), operation: .upsert))
 
         let state = Compactor.State(
             indexMap: indexMap,
@@ -122,7 +130,7 @@ final class CompactionTests: XCTestCase {
         for _ in 0..<10_000 {
             log.append(.init(
                 edgeID: IDFactory.live.edgeID(), fromID: from, toID: to, type: "L",
-                timestamp: Date(), operation: .insert
+                revision: nextRev(), operation: .upsert
             ))
         }
         let state = Compactor.State(
@@ -156,7 +164,7 @@ final class CompactionTests: XCTestCase {
         var log = EdgeLog()
         log.append(.init(
             edgeID: logEdgeID, fromID: ids[0], toID: ids[2], type: "L",
-            timestamp: Date(), operation: .insert
+            revision: nextRev(), operation: .upsert
         ))
 
         let pre = Compactor.State(indexMap: indexMap, forward: forward, reverse: reverse, log: log)
@@ -189,7 +197,7 @@ final class CompactionTests: XCTestCase {
         for _ in 0..<5 {
             log.append(.init(edgeID: IDFactory.live.edgeID(),
                              fromID: from, toID: to, type: "L",
-                             timestamp: Date(), operation: .insert))
+                             revision: nextRev(), operation: .upsert))
         }
         let policy = Compactor.Policy(thresholdMultiplier: 4)
         // 1 node → threshold = 4 entries → 5 entries should trigger.

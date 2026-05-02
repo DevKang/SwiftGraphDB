@@ -1,31 +1,26 @@
 import Foundation
 
-public enum EdgeLogOperation: Sendable, Equatable {
-    case insert
-    case delete
-}
-
 public struct EdgeLogEntry: Sendable, Equatable {
     public let edgeID: EdgeID
     public let fromID: NodeID
     public let toID: NodeID
     public let type: String
-    public let timestamp: Date
-    public let operation: EdgeLogOperation
+    public let revision: GraphRevision
+    public let operation: GraphOperation
 
     public init(
         edgeID: EdgeID,
         fromID: NodeID,
         toID: NodeID,
         type: String,
-        timestamp: Date,
-        operation: EdgeLogOperation
+        revision: GraphRevision,
+        operation: GraphOperation
     ) {
         self.edgeID = edgeID
         self.fromID = fromID
         self.toID = toID
         self.type = type
-        self.timestamp = timestamp
+        self.revision = revision
         self.operation = operation
     }
 }
@@ -81,14 +76,21 @@ public struct EdgeLog: Sendable {
     ) -> [EdgeRecord] {
         if logEntries.isEmpty { return Array(csrEdges) }
 
-        // Resolve each edge id to its final state. Later log entries overwrite earlier ones for
-        // the same id, and we remember the index of the *first* entry per id so that pass 2 can
-        // emit log-only inserts in stable order.
+        // Resolve each edge id to its final state. The "newer" entry wins per `GraphRevision`
+        // ordering — same-actor entries fall back to counter (matches OML-1932 behaviour);
+        // cross-actor entries use wallClock + actorID. We remember the *first* index per id so
+        // pass 2 can emit log-only inserts in stable order even when revisions don't.
         var finalState: [EdgeID: EdgeLogEntry] = [:]
         var firstSeen: [EdgeID: Int] = [:]
         for (i, entry) in logEntries.enumerated() {
-            finalState[entry.edgeID] = entry
-            if firstSeen[entry.edgeID] == nil { firstSeen[entry.edgeID] = i }
+            if let existing = finalState[entry.edgeID] {
+                if existing.revision < entry.revision {
+                    finalState[entry.edgeID] = entry
+                }
+            } else {
+                finalState[entry.edgeID] = entry
+                firstSeen[entry.edgeID] = i
+            }
         }
 
         // Pass 1: keep CSR edges that are not deleted or replaced.
@@ -98,7 +100,7 @@ public struct EdgeLog: Sendable {
         for record in csrEdges {
             if let resolved = finalState[record.edgeID] {
                 consumed.insert(record.edgeID)
-                if resolved.operation == .insert {
+                if resolved.operation == .upsert {
                     output.append(EdgeRecord(
                         toID: resolved.toID, edgeID: resolved.edgeID, type: resolved.type
                     ))
@@ -112,7 +114,7 @@ public struct EdgeLog: Sendable {
         // Pass 2: append remaining log inserts that didn't shadow a CSR edge, in stable order
         // of first-appearance in the log.
         let remainingInserts: [EdgeLogEntry] = finalState.values
-            .filter { $0.operation == .insert && !consumed.contains($0.edgeID) }
+            .filter { $0.operation == .upsert && !consumed.contains($0.edgeID) }
             .sorted { (firstSeen[$0.edgeID] ?? .max) < (firstSeen[$1.edgeID] ?? .max) }
 
         for entry in remainingInserts {
