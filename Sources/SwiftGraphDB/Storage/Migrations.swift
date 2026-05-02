@@ -8,10 +8,26 @@ import Foundation
 /// database half-evolved.
 public struct Migration: Sendable {
     public let version: Int
-    public let sql: String
+    /// Runs inside the migration runner's transaction. May execute SQL, stamp `db_meta`, or
+    /// perform per-row backfill — whatever the version requires.
+    public let perform: @Sendable (SQLiteStore) throws -> Void
+
+    public init(version: Int, perform: @escaping @Sendable (SQLiteStore) throws -> Void) {
+        self.version = version
+        self.perform = perform
+    }
+
+    /// Convenience for SQL-only migrations. Executes each `;`-delimited statement in order.
     public init(version: Int, sql: String) {
         self.version = version
-        self.sql = sql
+        self.perform = { store in
+            let statements = sql.split(separator: ";").map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }.filter { !$0.isEmpty }
+            for stmt in statements {
+                try store.execute(stmt)
+            }
+        }
     }
 }
 
@@ -27,7 +43,11 @@ public struct MigrationRunner: Sendable {
 
     /// The migrations that ship with `SwiftGraphDB`. New schema work appends to this list.
     public static let defaultMigrations: [Migration] = [
-        Migration(version: 1, sql: """
+        v1,
+        v2,
+    ]
+
+    private static let v1 = Migration(version: 1, sql: """
         CREATE TABLE nodes (
             id          TEXT PRIMARY KEY,
             label       TEXT NOT NULL,
@@ -64,10 +84,109 @@ public struct MigrationRunner: Sendable {
         ON edges(type)
         WHERE is_deleted = 0;
         """)
-        // Note: `db_meta` is bootstrapped by MigrationRunner before any migration runs,
-        // because we need it to record `schema_version` for the very first migration. It is
-        // therefore not part of migration #1's CREATE statements.
-    ]
+    // Note: `db_meta` is bootstrapped by MigrationRunner before any migration runs,
+    // because we need it to record `schema_version` for the very first migration. It is
+    // therefore not part of migration #1's CREATE statements.
+
+    /// Migration #2 — schema v2 (SPEC §5.1). Adds `revision` columns, the append-only
+    /// change journal, and per-backend sync metadata tables. Stamps a fresh `actor_id` and
+    /// back-fills existing v1 rows with `(actor_id, 0, modified_at)` so revisions are
+    /// immediately consistent with the v2 model.
+    private static let v2 = Migration(version: 2) { store in
+        // 1. ALTER TABLE node/edge — add nullable revision; we backfill before any code reads.
+        try store.execute("ALTER TABLE nodes ADD COLUMN revision TEXT")
+        try store.execute("ALTER TABLE edges ADD COLUMN revision TEXT")
+        try store.execute("CREATE INDEX idx_nodes_revision ON nodes(revision)")
+        try store.execute("CREATE INDEX idx_edges_revision ON edges(revision)")
+
+        // 2. Stamp actor_id once per store.
+        let existing = try store.query(
+            "SELECT value FROM db_meta WHERE key = ?", [.text("actor_id")]
+        ) { $0.text(at: 0) }
+        let actorIDString: String
+        if let value = existing.first.flatMap({ $0 }) {
+            actorIDString = value
+        } else {
+            actorIDString = UUID().uuidString
+            try store.execute(
+                "INSERT INTO db_meta (key, value) VALUES (?, ?)",
+                [.text("actor_id"), .text(actorIDString)]
+            )
+        }
+
+        // 3. Backfill `revision` for existing nodes and edges.
+        let actor = ActorID(uuidString: actorIDString)!
+        try MigrationRunner.backfillRevision(table: "nodes", store: store, actor: actor)
+        try MigrationRunner.backfillRevision(table: "edges", store: store, actor: actor)
+
+        // 4. Create the change journal + sync metadata tables.
+        try store.execute("""
+        CREATE TABLE change_journal (
+            sequence       INTEGER PRIMARY KEY AUTOINCREMENT,
+            change_id      TEXT NOT NULL UNIQUE,
+            graph_id       TEXT NOT NULL,
+            actor_id       TEXT NOT NULL,
+            entity_kind    TEXT NOT NULL CHECK (entity_kind IN ('node', 'edge')),
+            entity_id      TEXT NOT NULL,
+            operation      TEXT NOT NULL CHECK (operation IN ('upsert', 'delete')),
+            payload        BLOB,
+            base_revision  TEXT,
+            revision       TEXT NOT NULL,
+            created_at     REAL NOT NULL,
+            compacted_at   REAL
+        )
+        """)
+        try store.execute("CREATE INDEX idx_change_journal_entity ON change_journal(entity_kind, entity_id)")
+        try store.execute("CREATE INDEX idx_change_journal_sequence ON change_journal(sequence)")
+        try store.execute("""
+        CREATE INDEX idx_change_journal_uncompacted ON change_journal(sequence)
+        WHERE compacted_at IS NULL
+        """)
+
+        try store.execute("""
+        CREATE TABLE sync_checkpoints (
+            backend_id      TEXT PRIMARY KEY,
+            checkpoint      BLOB,
+            high_watermark  INTEGER NOT NULL DEFAULT 0,
+            updated_at      REAL NOT NULL
+        )
+        """)
+
+        try store.execute("""
+        CREATE TABLE sync_record_versions (
+            backend_id            TEXT NOT NULL,
+            entity_kind           TEXT NOT NULL CHECK (entity_kind IN ('node', 'edge')),
+            entity_id             TEXT NOT NULL,
+            last_synced_revision  TEXT NOT NULL,
+            base_payload          BLOB,
+            updated_at            REAL NOT NULL,
+            PRIMARY KEY (backend_id, entity_kind, entity_id)
+        )
+        """)
+    }
+
+    /// Backfill helper for migration #2.
+    fileprivate static func backfillRevision(table: String, store: SQLiteStore, actor: ActorID) throws {
+        struct Row { let id: String; let modifiedAt: Double }
+        let rows = try store.query(
+            "SELECT id, modified_at FROM \(table) WHERE revision IS NULL"
+        ) { row in
+            Row(id: row.text(at: 0) ?? "", modifiedAt: row.double(at: 1) ?? 0)
+        }
+        let encoder = JSONEncoder()
+        for r in rows {
+            let revision = GraphRevision(
+                actorID: actor,
+                counter: 0,
+                wallClock: Date(timeIntervalSince1970: r.modifiedAt)
+            )
+            let json = String(data: try encoder.encode(revision), encoding: .utf8) ?? "{}"
+            try store.execute(
+                "UPDATE \(table) SET revision = ? WHERE id = ?",
+                [.text(json), .text(r.id)]
+            )
+        }
+    }
 
     /// Convenience: open-on-first-use migration runner with the default schema.
     public static func runDefault(on store: SQLiteStore) throws {
@@ -80,7 +199,7 @@ public struct MigrationRunner: Sendable {
 
         for migration in migrations where migration.version > current {
             try store.transaction { _ in
-                try executeAll(sql: migration.sql, on: store)
+                try migration.perform(store)
                 try setVersion(migration.version, on: store)
             }
         }
@@ -133,14 +252,4 @@ public struct MigrationRunner: Sendable {
         }
     }
 
-    private func executeAll(sql: String, on store: SQLiteStore) throws {
-        // SQLite's prepare_v2 only handles one statement per call. Split on `;` boundaries
-        // (naïve but sufficient: our migration SQL never embeds a semicolon inside a string).
-        let statements = sql.split(separator: ";").map {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines)
-        }.filter { !$0.isEmpty }
-        for stmt in statements {
-            try store.execute(stmt)
-        }
-    }
 }
