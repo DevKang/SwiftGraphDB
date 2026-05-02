@@ -5,14 +5,14 @@ final class MigrationTests: XCTestCase {
 
     // MARK: - Initial migration
 
-    func testFreshOpenStampsSchemaVersion1AndStableGraphID() throws {
+    func testFreshOpenStampsCurrentSchemaAndStableGraphID() throws {
         let store = try SQLiteStore.openInMemory()
         defer { store.close() }
 
         try MigrationRunner.runDefault(on: store)
 
         let version = try meta(store, key: "schema_version")
-        XCTAssertEqual(version, "1")
+        XCTAssertEqual(version, "2", "default ships v1 + v2; current head is 2")
 
         let graphID = try meta(store, key: "graph_id")
         XCTAssertNotNil(graphID)
@@ -39,42 +39,50 @@ final class MigrationTests: XCTestCase {
         defer { store.close() }
         try MigrationRunner.runDefault(on: store)
         XCTAssertEqual(try meta(store, key: "graph_id"), firstID)
-        XCTAssertEqual(try meta(store, key: "schema_version"), "1")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "2")
     }
 
     // MARK: - Schema shape
 
-    func testTablesAndIndexesMatchSpec() throws {
+    func testTablesAndIndexesContainBothMigrationLayers() throws {
         let store = try SQLiteStore.openInMemory()
         defer { store.close() }
         try MigrationRunner.runDefault(on: store)
 
-        let tables = try store.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name") {
+        let tables = Set(try store.query("SELECT name FROM sqlite_master WHERE type = 'table'") {
             $0.text(at: 0)!
-        }
-        XCTAssertEqual(Set(tables), ["db_meta", "edges", "nodes"])
+        })
+        // Migration #1 tables + #2 tables.
+        XCTAssertTrue(tables.isSuperset(of: [
+            "db_meta", "edges", "nodes",
+            "change_journal", "sync_checkpoints", "sync_record_versions",
+        ]))
 
         let indexes = Set(try store.query(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'"
         ) { $0.text(at: 0)! })
-        XCTAssertTrue(indexes.contains("idx_nodes_label"))
-        XCTAssertTrue(indexes.contains("idx_edges_from"))
-        XCTAssertTrue(indexes.contains("idx_edges_to"))
-        XCTAssertTrue(indexes.contains("idx_edges_type"))
+        XCTAssertTrue(indexes.isSuperset(of: [
+            "idx_nodes_label", "idx_edges_from", "idx_edges_to", "idx_edges_type",
+            "idx_nodes_revision", "idx_edges_revision",
+            "idx_change_journal_entity", "idx_change_journal_sequence", "idx_change_journal_uncompacted",
+        ]))
     }
 
-    func testNodesTableColumnsMatchSpec() throws {
+    func testNodesTableColumnsMatchV2Spec() throws {
         let store = try SQLiteStore.openInMemory()
         defer { store.close() }
         try MigrationRunner.runDefault(on: store)
 
         let columns = try store.query("PRAGMA table_info(nodes)") { row in
-            row.text(at: 1)! // column 1 is `name` in PRAGMA table_info output
+            row.text(at: 1)!
         }
-        XCTAssertEqual(Set(columns), ["id", "label", "properties", "created_at", "modified_at", "is_deleted"])
+        XCTAssertEqual(
+            Set(columns),
+            ["id", "label", "properties", "created_at", "modified_at", "is_deleted", "revision"]
+        )
     }
 
-    func testEdgesTableColumnsMatchSpec() throws {
+    func testEdgesTableColumnsMatchV2Spec() throws {
         let store = try SQLiteStore.openInMemory()
         defer { store.close() }
         try MigrationRunner.runDefault(on: store)
@@ -84,7 +92,10 @@ final class MigrationTests: XCTestCase {
         }
         XCTAssertEqual(
             Set(columns),
-            ["id", "type", "from_id", "to_id", "properties", "created_at", "modified_at", "is_deleted"]
+            [
+                "id", "type", "from_id", "to_id", "properties",
+                "created_at", "modified_at", "is_deleted", "revision",
+            ]
         )
     }
 
@@ -101,7 +112,6 @@ final class MigrationTests: XCTestCase {
 
         XCTAssertThrowsError(try runner.run(on: store))
 
-        // Version stayed at 1.
         let version = try meta(store, key: "schema_version")
         XCTAssertEqual(version, "1")
 
@@ -112,20 +122,20 @@ final class MigrationTests: XCTestCase {
         XCTAssertFalse(tables.contains("bar"), "failed migration should not have left tables behind")
     }
 
-    func testNewMigrationRunsOnceOnNextOpen() throws {
+    func testHypotheticalMigration3RunsOnceOnNextOpen() throws {
         let store = try SQLiteStore.openInMemory()
         defer { store.close() }
 
         try MigrationRunner.runDefault(on: store)
 
-        let v2 = MigrationRunner(migrations: MigrationRunner.defaultMigrations + [
-            Migration(version: 2, sql: "CREATE TABLE extension_table (id INTEGER PRIMARY KEY)"),
+        let extended = MigrationRunner(migrations: MigrationRunner.defaultMigrations + [
+            Migration(version: 3, sql: "CREATE TABLE extension_table (id INTEGER PRIMARY KEY)"),
         ])
-        try v2.run(on: store)
-        XCTAssertEqual(try meta(store, key: "schema_version"), "2")
+        try extended.run(on: store)
+        XCTAssertEqual(try meta(store, key: "schema_version"), "3")
 
         // Running again is a no-op.
-        try v2.run(on: store)
+        try extended.run(on: store)
         let count = try store.query("SELECT COUNT(*) FROM extension_table") { $0.int(at: 0)! }.first ?? -1
         XCTAssertEqual(count, 0)
     }
