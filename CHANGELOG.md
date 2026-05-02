@@ -10,6 +10,17 @@ This project follows the spirit of [Keep a Changelog](https://keepachangelog.com
 
 ### Added
 
+- _(nothing yet — post-0.1.0 work lands here)_
+
+## [0.1.0] - 2026-05-02
+
+First public release. The core graph engine, query layer, sync protocol, and CloudKit
+reference adapter are all considered Stable for the 0.1.x line. See
+[`Scripts/public-api-allowlist.txt`](Scripts/public-api-allowlist.txt) for the frozen
+public surface and the SwiftGraphDB / SwiftGraphDBCloudKit DocC catalogs for documentation.
+
+### Added
+
 - Added a backend-agnostic sync protocol direction for the core package.
 - Added `GraphChange` as the canonical change model for sync adapters.
 - Added `GraphSyncTransport` as the minimal transport boundary:
