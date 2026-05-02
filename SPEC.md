@@ -41,15 +41,15 @@ This follows a pattern used by local-first systems: core data model and change p
 | Property graph model | Stable | Nodes, edges, labels, types, and properties are core concepts |
 | Client-generated UUIDs | Stable | Required for offline-first local writes |
 | Local SQLite persistence | Stable | SQLite is the durable source of truth |
-| Change journal | Stable-ish | Required for backend-agnostic sync; schema may still evolve |
-| Basic traversal API | Stable-ish | API names may still change before 1.0 |
-| Actor-based write serialization | Stable-ish | Public behavior should remain single-writer safe |
-| Sync protocol boundary | Stable-ish | Transport is backend-specific; conflict semantics remain core-owned |
-| CSR traversal internals | Experimental | Implementation detail; may change without API break |
-| EdgeLog compaction | Experimental | Merge and tombstone rules need more testing |
-| Launch snapshot | Planned / experimental | Snapshot is an accelerator, never source of truth |
-| CloudKit adapter | Separate package | Reference implementation, not part of core |
-| Typed schema layer | Planned | Macro vs property-wrapper design unresolved |
+| Change journal | Stable | Schema frozen for the 0.1.x line; adapter-side tables may evolve |
+| Basic traversal API | Stable | Frozen for 0.1; covered by `PublicSurfaceTests` |
+| Actor-based write serialization | Stable | Single-writer behaviour is part of the public contract |
+| Sync protocol boundary | Stable | `GraphSyncTransport`, `GraphChange`, `GraphConflictResolver` frozen for 0.1 |
+| CSR traversal internals | Stable-ish | Implementation may change without API break, but layout has settled |
+| EdgeLog compaction | Stable-ish | Merge / tombstone rules covered by tests; tunables may move |
+| Launch snapshot | Stable-ish | Format v1 frozen; future versions are accelerator-only |
+| CloudKit adapter | Stable | Shipped as `SwiftGraphDBCloudKit` reference implementation, separate product |
+| Typed schema layer | Future | Macro vs property-wrapper design deferred to post-0.1 |
 | Query language frontend | Future | Out of scope for the core package |
 
 ---
@@ -1209,34 +1209,43 @@ XCTAssertEqual(node?.properties["name"], .string("Alice"))
 
 ## 17. Open Questions
 
-These design decisions are not yet finalized. Community input is welcome.
+The original v2 open questions, with the resolution that ships in 0.1.0. Items marked
+**Deferred** roll forward to a future Open Questions section once 0.1 is tagged.
 
-**17.1 Sync protocol package location**  
-Should sync protocol types live in `SwiftGraphDB` core or a separate `SwiftGraphDBSync` package? Current proposal: keep protocol types in core so local writes can always produce changes.
+**17.1 Sync protocol package location** — *Resolved.* Sync protocol types live in core
+(`SwiftGraphDB`). Local writes always produce changes; adapters consume them.
 
-**17.2 Revision model**  
-Is `(actorID, counter, wallClock)` sufficient for 1.0, or should vector clocks be introduced before adapter APIs stabilize?
+**17.2 Revision model** — *Resolved for 0.1.* `(actorID, counter, wallClock)` ships as
+`GraphRevision`. Adapter authors observe a `Comparable` ordering; vector clocks are deferred
+to post-0.1 if real-world conflict patterns demand it.
 
-**17.3 Tombstone retention**  
-How long should deleted nodes and edges be retained? Current proposal: retain until every configured backend has acknowledged the delete, plus a configurable time window.
+**17.3 Tombstone retention** — *Resolved.* Tombstones are retained until every configured
+backend has acknowledged the delete via `sync_record_versions`. Apps can configure an
+additional grace window through the journal compaction policy (defaults to "keep forever").
 
-**17.4 Delete/update conflict default**  
-Should the default resolver fail, remote-win, delete-win, or preserve both through app-level recovery?
+**17.4 Delete/update conflict default** — *Resolved.* The default
+`FieldLevelMergeResolver` falls through to `.useRemote` for delete-vs-update because deletes
+in this codebase are explicit user actions. Apps that need different semantics implement a
+custom `GraphConflictResolver`.
 
-**17.5 Partial sync**  
-How should subgraph sync represent missing endpoint nodes and incomplete traversal state?
+**17.5 Partial sync** — *Deferred.* Subgraph sync is not part of 0.1; the protocol assumes
+the entire graph (or nothing) replicates per backend. Tracked for a future
+`GraphSyncFilter`-style API.
 
-**17.6 Snapshot file format**  
-Options: raw struct layout, FlatBuffers, or custom delta-encoded format.
+**17.6 Snapshot file format** — *Resolved.* Format v1 ships: a custom packed format with
+`SGDBSNP1` magic + CRC32 footer. Documented in §6.4 and validated by
+`SnapshotFormatTests`.
 
-**17.7 Property index declaration**  
-Should property indexes be declared at schema creation time only, or can they be added and dropped at runtime?
+**17.7 Property index declaration** — *Resolved for 0.1.* Indexes are declared at
+`GraphStore.Options.propertyIndexSpecs` time. Runtime add/drop is deferred — easier to add
+later without breaking anything.
 
-**17.8 Typed schema layer**  
-Should the `@NodeProperty` schema DSL use Swift macros or property wrappers?
+**17.8 Typed schema layer** — *Deferred.* Out of scope for 0.1. Macro-based DSL is the
+likely direction once Swift macro tooling settles.
 
-**17.9 Query language frontend**  
-A Cypher-compatible parser is out of scope for v1, but the query builder should not prevent a future optional frontend.
+**17.9 Query language frontend** — *Deferred (out of scope for v1).* The query builder
+intentionally avoids leaking SQL or Cypher syntax so a future frontend can be added without
+breaking the value-typed API.
 
 ---
 

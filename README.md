@@ -32,35 +32,37 @@ Use SQLite, Core Data, GRDB, or SwiftData directly when your data is mostly tabu
 
 ## Current Status
 
-SwiftGraphDB is intended to be usable as a local embedded graph database before the repository is opened publicly.
+**0.1.0** ships the full local engine, the sync protocol, and a CloudKit reference adapter.
+The public surface is frozen for the 0.1.x line — see
+[`Scripts/public-api-allowlist.txt`](Scripts/public-api-allowlist.txt) and the
+[Design Stability table in SPEC.md](SPEC.md#design-stability).
 
-### Available in the core package
+### Shipped in `SwiftGraphDB` (core)
 
 - Property graph model: nodes, directed edges, labels, types, and properties
-- Swift-native API for creating nodes and edges
-- Local traversal API for common graph queries
-- SQLite-backed local persistence
-- Append-only change journal for sync adapters
-- Backend-agnostic sync protocol types
-- Single-process usage for iOS and macOS apps
+- Swift-native API for CRUD, queries, traversal, and shortest-path
+- SQLite-backed local persistence with WAL-mode and partial indexes
+- In-memory CSR adjacency + EdgeLog write buffer + compaction
+- Launch snapshot format (`SGDBSNP1`) with CRC32 footer
+- Property indexes declared at `GraphStore.Options` time
+- Append-only change journal
+- Backend-agnostic sync protocol (`GraphChange`, `GraphSyncTransport`, `GraphConflictResolver`)
+- Three built-in resolvers: `FieldLevelMergeResolver`, `LocalWinsResolver`, `RemoteWinsResolver`
+- `InMemorySyncBackend` for tests and SDK demos
+- Reusable `GraphSyncContract<Transport>` for adapter authors
 
-### Experimental or evolving
+### Shipped in `SwiftGraphDBCloudKit` (optional, separate product)
 
-- CSR-backed traversal internals
-- EdgeLog compaction strategy
-- Launch snapshot format
-- Property indexes
-- Advanced path queries
-- Conflict resolution policies for sync
-- Performance tuning and benchmark coverage
+- `CloudKitGraphSyncTransport` driving the sync protocol on top of a `CloudKitDatabase` abstraction
+- `RecordCodec` for `GraphChange` ↔ `GDB_Node` / `GDB_Edge` mapping
+- Batch chunking + `limitExceeded` halving + `retryAfter`-aware exponential backoff (5 min cap)
+- iCloud account-state preflight via `CloudKitAccountStatusProbe`
+- `MockCloudKitDatabase` and `SharedMockCloudKitBackend` for adapter testing
 
-### Separate packages
+### Future package candidates (not shipped)
 
-- `SwiftGraphDBCloudKit` — planned CloudKit reference adapter
 - `SwiftGraphDBREST` — possible REST reference adapter
 - third-party adapters for Firebase, Supabase, custom servers, or local-file sync
-
-The public API may still change before `1.0`. See [SPEC.md](SPEC.md) for design stability and open questions.
 
 ---
 
@@ -320,30 +322,33 @@ File → Add Package Dependencies → enter repository URL.
 
 ## Roadmap
 
-### Core graph engine
+### Shipped in 0.1.0
 
 - [x] Property graph model
 - [x] Node and edge CRUD
-- [x] Local traversal API
-- [x] SQLite persistence
-- [ ] CSR traversal optimization
-- [ ] EdgeLog compaction tuning
-- [ ] Launch snapshot format
-- [ ] Property index declaration API
-- [ ] Benchmark datasets
+- [x] Local traversal API + shortest-path
+- [x] SQLite persistence (WAL, partial indexes)
+- [x] CSR traversal optimization
+- [x] EdgeLog compaction
+- [x] Launch snapshot format
+- [x] Property index declaration API
+- [x] Benchmark harness
+- [x] Change journal
+- [x] Backend-agnostic `GraphSyncTransport`
+- [x] Conflict resolver API + three built-in resolvers
+- [x] Sync adapter contract suite (`GraphSyncContract<Transport>`)
+- [x] `SwiftGraphDBCloudKit` reference adapter
 
-### Sync protocol
+### Planned for 0.1.x
 
-- [x] Change journal design
-- [x] Backend-agnostic `GraphSyncTransport` shape
-- [x] Conflict resolver API shape
-- [ ] Sync adapter contract tests
-- [ ] Tombstone retention policy
-- [ ] Partial sync / subgraph sync design
+- [ ] Configurable tombstone retention beyond "all backends acknowledged"
+- [ ] CKSyncEngine-backed `CloudKitDatabase` reference implementation
+- [ ] Additional resolver presets (last-write-wins, CRDT counter examples)
 
-### Adapter packages
+### Targeted for 0.2 and beyond
 
-- [ ] `SwiftGraphDBCloudKit` reference adapter
+- [ ] Typed schema layer (likely Swift macros)
+- [ ] Partial / subgraph sync
 - [ ] REST reference adapter
 - [ ] Firebase / Supabase design notes
 
