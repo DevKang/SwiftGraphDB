@@ -59,6 +59,7 @@ public struct CloudKitRecord: Sendable, Hashable, Codable {
     }
 }
 
+/// Outcome of `CloudKitDatabase.modify` — saved + deleted records and any server conflicts.
 public struct CloudKitModifyResult: Sendable {
     public var saved: [CloudKitRecord]
     public var deleted: [CloudKitRecordID]
@@ -70,6 +71,8 @@ public struct CloudKitModifyResult: Sendable {
     }
 }
 
+/// Outcome of `CloudKitDatabase.fetchChanges` — changed + deleted record IDs, the new server change
+/// token, and a `moreComing` flag for paging.
 public struct CloudKitFetchResult: Sendable {
     public var changedRecords: [CloudKitRecord]
     public var deletedRecordIDs: [CloudKitRecordID]

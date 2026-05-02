@@ -73,6 +73,7 @@ extension GraphStore {
     }
 }
 
+/// Errors raised by the per-store sync registry when registering or operating on backends.
 public enum SyncRegistryError: Error, Equatable {
     case unknownBackend(String)
 }

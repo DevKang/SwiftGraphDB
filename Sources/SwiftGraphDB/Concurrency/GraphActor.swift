@@ -556,6 +556,7 @@ public actor GraphActor {
     }
 }
 
+/// Errors thrown by `GraphActor` for invariant violations the storage layer cannot recover from.
 public enum GraphActorError: Error, Equatable {
     case injectedSQLiteFailure
     case injectedInMemoryFailure

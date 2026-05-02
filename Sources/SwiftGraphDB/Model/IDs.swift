@@ -1,6 +1,8 @@
 import Foundation
 
+/// Stable identifier for a graph node.
 public typealias NodeID = UUID
+/// Stable identifier for a graph edge.
 public typealias EdgeID = UUID
 
 /// Mints `NodeID` and `EdgeID` values.

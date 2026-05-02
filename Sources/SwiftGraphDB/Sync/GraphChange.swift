@@ -1,5 +1,6 @@
 import Foundation
 
+/// Discriminator for whether a `GraphEntityRef` points at a node or an edge.
 public enum GraphEntityKind: String, Codable, Sendable, Hashable {
     case node, edge
 }
@@ -95,6 +96,7 @@ public struct GraphChange: Codable, Sendable, Hashable {
     }
 }
 
+/// Errors raised when validating or decoding a `GraphChange`.
 public enum GraphChangeError: Error, Equatable {
     case upsertMissingPayload
     case unsupportedPayloadFormat(found: PayloadFormatVersion)

@@ -32,6 +32,7 @@ public struct SnapshotPayload: Codable, Sendable, Equatable {
     public let reverseEdges: [EdgeRow]
 }
 
+/// Constants and helpers for the on-disk launch-snapshot binary format.
 public enum SnapshotFormat {
     public static let currentFormatVersion: Int32 = 1
 
@@ -142,6 +143,7 @@ public enum SnapshotFormat {
     }
 }
 
+/// Errors thrown while reading or writing a launch snapshot.
 public enum SnapshotError: Error, Equatable {
     case malformed(String)
     case formatVersionMismatch(found: Int32, expected: Int32)

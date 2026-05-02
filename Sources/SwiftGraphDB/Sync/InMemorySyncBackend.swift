@@ -103,10 +103,12 @@ public actor InMemorySyncBackend {
     }
 }
 
+/// Failures injected by `InMemorySyncBackend` for testing transient/permanent error paths.
 public enum InMemorySyncError: Error, Equatable {
     case injectedTransient
 }
 
+/// Per-device transport handed back by `InMemorySyncBackend.transport(for:)`.
 public struct InMemorySyncTransport: GraphSyncTransport, Sendable {
     public let backendID: SyncBackendID
     let backend: InMemorySyncBackend

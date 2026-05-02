@@ -152,6 +152,7 @@ public actor SyncCoordinator {
     }
 }
 
+/// Errors raised by `SyncCoordinator.runOnce` when a conflict cannot be resolved.
 public enum SyncCoordinatorError: Error, Equatable {
     case unresolvedConflict(String)
 }

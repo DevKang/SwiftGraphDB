@@ -1,5 +1,6 @@
 import Foundation
 
+/// One pending entry in the in-memory edge write buffer awaiting compaction.
 public struct EdgeLogEntry: Sendable, Equatable {
     public let edgeID: EdgeID
     public let fromID: NodeID
