@@ -26,6 +26,11 @@ public actor GraphActor {
     private var revisionCounter: Int64 = 0
     /// Local actor identity, hydrated lazily from `db_meta.actor_id` on first revision mint.
     private var actorIDCache: ActorID?
+    /// Local graph identity, hydrated lazily from `db_meta.graph_id`. Stamped onto every
+    /// `change_journal` row so adapters can attribute changes to the right store.
+    private var graphIDCache: GraphID?
+
+    private var journal: ChangeJournalStore { ChangeJournalStore(store: store) }
 
     private func mintRevision() throws -> GraphRevision {
         if actorIDCache == nil {
@@ -37,8 +42,52 @@ public actor GraphActor {
             }
             actorIDCache = parsed
         }
+        // On first call, hydrate `revisionCounter` from MAX(counter) over our own revisions
+        // so that re-opening a store doesn't reset the counter back to 1.
+        if revisionCounter == 0 {
+            revisionCounter = try maxKnownCounter()
+        }
         revisionCounter += 1
         return GraphRevision(actorID: actorIDCache!, counter: revisionCounter, wallClock: Date())
+    }
+
+    private func graphID() throws -> GraphID {
+        if let cached = graphIDCache { return cached }
+        let rows = try store.query(
+            "SELECT value FROM db_meta WHERE key = ?", [.text("graph_id")]
+        ) { $0.text(at: 0) }
+        guard let value = rows.first.flatMap({ $0 }), let parsed = GraphID(uuidString: value) else {
+            throw GraphActorError.actorIDMissing // re-use; missing meta is the same diagnosis
+        }
+        graphIDCache = parsed
+        return parsed
+    }
+
+    private func maxKnownCounter() throws -> Int64 {
+        guard let actor = actorIDCache else { return 0 }
+        // Inspect change_journal first (highest fidelity); fall back to entity rows.
+        let actorJSONFragment = "\"actorID\":\"\(actor.uuidString)\""
+        let cj = try store.query(
+            "SELECT revision FROM change_journal WHERE actor_id = ? ORDER BY sequence DESC LIMIT 1",
+            [.text(actor.uuidString)]
+        ) { $0.text(at: 0) }
+        if let json = cj.first.flatMap({ $0 }),
+           let data = json.data(using: .utf8),
+           let r = try? JSONDecoder().decode(GraphRevision.self, from: data) {
+            return r.counter
+        }
+        // No journal rows yet — hunt entity tables.
+        var best: Int64 = 0
+        for table in ["nodes", "edges"] {
+            let rows = try store.query("SELECT revision FROM \(table)") { $0.text(at: 0) }
+            for raw in rows where raw?.contains(actorJSONFragment) == true {
+                if let json = raw, let data = json.data(using: .utf8),
+                   let r = try? JSONDecoder().decode(GraphRevision.self, from: data) {
+                    best = max(best, r.counter)
+                }
+            }
+        }
+        return best
     }
 
     /// Test-only injection point. Production code never sets this.
@@ -84,8 +133,27 @@ public actor GraphActor {
         let id = IDFactory.live.nodeID()
         let revision = try mintRevision()
         let node = Node(id: id, label: label, properties: properties, revision: revision)
+        let payload = try PropertyCoding.encode(properties)
+        let graphID = try graphID()
 
-        try sqliteOrFail { try nodeRepo.insert(node) }
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try nodeRepo.insert(node)
+                try journal.append(ChangeJournalRow(
+                    sequence: 0,
+                    changeID: ChangeID(),
+                    graphID: graphID,
+                    actorID: revision.actorID,
+                    entityKind: .node,
+                    entityID: id,
+                    operation: .upsert,
+                    payload: payload,
+                    baseRevision: nil,
+                    revision: revision,
+                    createdAt: Date()
+                ))
+            }
+        }
         do {
             try inMemoryOrFail {
                 _ = self.indexMap.intern(id)
@@ -109,8 +177,31 @@ public actor GraphActor {
         let revision = try mintRevision()
         let edge = Edge(id: edgeID, type: type, fromID: from, toID: to,
                         properties: properties, revision: revision)
+        let payload = try PropertyCoding.encode([
+            "__from": .string(from.uuidString),
+            "__to": .string(to.uuidString),
+            "__type": .string(type),
+        ].merging(properties) { _, new in new })
+        let graphID = try graphID()
 
-        try sqliteOrFail { try edgeRepo.insert(edge) }
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try edgeRepo.insert(edge)
+                try journal.append(ChangeJournalRow(
+                    sequence: 0,
+                    changeID: ChangeID(),
+                    graphID: graphID,
+                    actorID: revision.actorID,
+                    entityKind: .edge,
+                    entityID: edgeID,
+                    operation: .upsert,
+                    payload: payload,
+                    baseRevision: nil,
+                    revision: revision,
+                    createdAt: Date()
+                ))
+            }
+        }
         do {
             try inMemoryOrFail {
                 self.edgeLog.append(.init(
@@ -131,7 +222,27 @@ public actor GraphActor {
             throw RepositoryError.notFound(id: id.uuidString)
         }
         let revision = try mintRevision()
-        try sqliteOrFail { try nodeRepo.update(id: id, properties: properties, revision: revision) }
+        let merged = existing.with(properties: properties).properties
+        let payload = try PropertyCoding.encode(merged)
+        let graphID = try graphID()
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try nodeRepo.update(id: id, properties: properties, revision: revision)
+                try journal.append(ChangeJournalRow(
+                    sequence: 0,
+                    changeID: ChangeID(),
+                    graphID: graphID,
+                    actorID: revision.actorID,
+                    entityKind: .node,
+                    entityID: id,
+                    operation: .upsert,
+                    payload: payload,
+                    baseRevision: existing.revision,
+                    revision: revision,
+                    createdAt: Date()
+                ))
+            }
+        }
         do {
             try inMemoryOrFail {
                 let merged = existing.with(properties: properties)
@@ -143,15 +254,55 @@ public actor GraphActor {
     }
 
     public func updateEdge(id: EdgeID, properties: [String: PropertyValue]) async throws {
+        guard let existing = try edgeRepo.fetch(id: id) else {
+            throw RepositoryError.notFound(id: id.uuidString)
+        }
         let revision = try mintRevision()
-        try sqliteOrFail { try edgeRepo.update(id: id, properties: properties, revision: revision) }
-        // No in-memory edge property cache yet; nothing to update.
+        let merged = existing.with(properties: properties).properties
+        let payload = try PropertyCoding.encode(merged)
+        let graphID = try graphID()
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try edgeRepo.update(id: id, properties: properties, revision: revision)
+                try journal.append(ChangeJournalRow(
+                    sequence: 0,
+                    changeID: ChangeID(),
+                    graphID: graphID,
+                    actorID: revision.actorID,
+                    entityKind: .edge,
+                    entityID: id,
+                    operation: .upsert,
+                    payload: payload,
+                    baseRevision: existing.revision,
+                    revision: revision,
+                    createdAt: Date()
+                ))
+            }
+        }
     }
 
     public func deleteNode(id: NodeID) async throws {
         guard let existing = try nodeRepo.fetch(id: id) else { return }
         let revision = try mintRevision()
-        try sqliteOrFail { try nodeRepo.delete(id: id, revision: revision) }
+        let graphID = try graphID()
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try nodeRepo.delete(id: id, revision: revision)
+                try journal.append(ChangeJournalRow(
+                    sequence: 0,
+                    changeID: ChangeID(),
+                    graphID: graphID,
+                    actorID: revision.actorID,
+                    entityKind: .node,
+                    entityID: id,
+                    operation: .delete,
+                    payload: nil,
+                    baseRevision: existing.revision,
+                    revision: revision,
+                    createdAt: Date()
+                ))
+            }
+        }
         do {
             try inMemoryOrFail {
                 self.labelIndex.remove(id, label: existing.label)
@@ -168,7 +319,25 @@ public actor GraphActor {
     public func deleteEdge(id: EdgeID) async throws {
         guard let existing = try edgeRepo.fetch(id: id) else { return }
         let revision = try mintRevision()
-        try sqliteOrFail { try edgeRepo.delete(id: id, revision: revision) }
+        let graphID = try graphID()
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try edgeRepo.delete(id: id, revision: revision)
+                try journal.append(ChangeJournalRow(
+                    sequence: 0,
+                    changeID: ChangeID(),
+                    graphID: graphID,
+                    actorID: revision.actorID,
+                    entityKind: .edge,
+                    entityID: id,
+                    operation: .delete,
+                    payload: nil,
+                    baseRevision: existing.revision,
+                    revision: revision,
+                    createdAt: Date()
+                ))
+            }
+        }
         do {
             try inMemoryOrFail {
                 self.edgeLog.append(.init(
