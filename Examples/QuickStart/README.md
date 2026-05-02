@@ -16,17 +16,36 @@ a separate Swift Package (`Examples/QuickStart/Package.swift`) so SwiftPM consum
 
 ## Run it
 
-### macOS
+### macOS — quickest path
 
 ```bash
 cd Examples/QuickStart
 swift run QuickStart
 ```
 
+A native window opens with the seeded graph. The `init()` on `QuickStartApp` calls
+`NSApplication.setActivationPolicy(.regular)` so the executable surfaces as a regular app
+instead of a background process.
+
+### macOS — from Xcode
+
+1. `File ▸ Open…` and select the `Examples/QuickStart` folder (the one with `Package.swift`).
+2. Wait for SwiftPM resolution.
+3. Pick the `QuickStart` scheme and the `My Mac` run destination.
+4. ⌘R.
+
 ### iOS Simulator
 
-Open `Examples/QuickStart` directly in Xcode (File → Open → select the folder). Pick an iOS
-Simulator and Run.
+SwiftPM executable products do not deploy to iOS Simulator on their own — Xcode needs an
+iOS app target to install a `.app` bundle. To try the sample on iOS:
+
+1. Create a new Xcode iOS App project anywhere.
+2. `File ▸ Add Package Dependencies…` and add SwiftGraphDB (use `Add Local…` and point at
+   the `SwiftGraphDB` repository root, or use the public URL once it's published).
+3. Replace the generated `App.swift` and `ContentView.swift` with the contents of
+   [`QuickStartApp.swift`](Sources/QuickStart/QuickStartApp.swift). Drop the
+   `init()` block — iOS doesn't need the activation-policy dance.
+4. Run on any iOS Simulator.
 
 ## Manual smoke-test checklist
 

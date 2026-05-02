@@ -1,12 +1,26 @@
 import SwiftUI
 import SwiftGraphDB
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // Minimal SwiftUI sample exercising the SwiftGraphDB public surface end to end.
-// Open Examples/QuickStart in Xcode and run on the iOS simulator or macOS.
+// Run with `swift run QuickStart` from Examples/QuickStart, or open the folder in Xcode
+// and pick the QuickStart scheme on the My Mac (Designed for iPad) destination.
 
 @main
 struct QuickStartApp: App {
     @StateObject private var model = GraphModel()
+
+    init() {
+        #if canImport(AppKit)
+        // SwiftPM executable products launch as `.accessory` by default, which means the
+        // window is created but never activates. Promote to a regular app and bring it
+        // forward so the sample actually shows up when run from `swift run` or Xcode.
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
