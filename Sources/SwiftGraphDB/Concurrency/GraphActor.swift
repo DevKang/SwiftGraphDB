@@ -95,7 +95,8 @@ public actor GraphActor {
             try inMemoryOrFail {
                 self.edgeLog.append(.init(
                     edgeID: edgeID, fromID: from, toID: to, type: type,
-                    timestamp: Date(), operation: .insert
+                    revision: GraphRevision.placeholder(wallClock: Date()),
+                    operation: .upsert
                 ))
             }
         } catch {
@@ -148,7 +149,9 @@ public actor GraphActor {
             try inMemoryOrFail {
                 self.edgeLog.append(.init(
                     edgeID: id, fromID: existing.fromID, toID: existing.toID,
-                    type: existing.type, timestamp: Date(), operation: .delete
+                    type: existing.type,
+                    revision: GraphRevision.placeholder(wallClock: Date()),
+                    operation: .delete
                 ))
             }
         } catch {
