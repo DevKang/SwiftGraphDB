@@ -107,6 +107,27 @@ final class InMemorySyncBackendTests: XCTestCase {
         }
     }
 
+    func testPullWithStaleCheckpointDoesNotCrash() async throws {
+        // Simulate: push changes to backend A, get a checkpoint with cursor=2,
+        // then create a NEW backend B (empty log) and pull with the stale checkpoint.
+        // Before the fix this crashed with "Range requires lowerBound <= upperBound".
+        let backendA = InMemorySyncBackend()
+        let actor = UUID()
+        let device = SyncBackendID(actor.uuidString)
+        let transportA = await backendA.transport(for: device)
+
+        let changes = [makeChange(actorID: actor, sequence: 1), makeChange(actorID: actor, sequence: 2)]
+        let pushResult = try await transportA.push(.init(graphID: UUID(), backendID: device, changes: changes, highWatermark: 0))
+        let staleCheckpoint = pushResult.checkpoint
+
+        // New backend with empty log — stale cursor (2) exceeds log.count (0).
+        let backendB = InMemorySyncBackend()
+        let transportB = await backendB.transport(for: device)
+        let pullResult = try await transportB.pull(since: staleCheckpoint)
+        XCTAssertTrue(pullResult.changes.isEmpty)
+        XCTAssertNotNil(pullResult.checkpoint)
+    }
+
     func testInjectedTransientPullThrows() async throws {
         let backend = InMemorySyncBackend()
         let device = SyncBackendID(UUID().uuidString)

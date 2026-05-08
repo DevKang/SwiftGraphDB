@@ -70,8 +70,10 @@ public actor InMemorySyncBackend {
             injectFailureMode = .none
             throw InMemorySyncError.injectedTransient
         }
-        let cursor = checkpoint.flatMap { decodeCursor($0.data) } ?? deviceCursors[device] ?? 0
-        // Only return changes from *other* devices so a device never re-pulls its own writes.
+        let rawCursor = checkpoint.flatMap { decodeCursor($0.data) } ?? deviceCursors[device] ?? 0
+        // Clamp to log.count so a stale checkpoint from a previous backend instance
+        // doesn't produce an invalid range.
+        let cursor = min(rawCursor, log.count)
         var taken: [GraphChange] = []
         for i in cursor..<log.count {
             let change = log[i]
