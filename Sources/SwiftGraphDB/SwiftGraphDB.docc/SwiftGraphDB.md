@@ -65,10 +65,10 @@ print(people.count)  // 2
 
 ## See also
 
-- [SPEC.md](https://github.com/oomool/SwiftGraphDB/blob/main/SPEC.md) — full architectural
+- [SPEC.md](https://github.com/DevKang/SwiftGraphDB/blob/main/SPEC.md) — full architectural
   specification.
-- [README.md](https://github.com/oomool/SwiftGraphDB/blob/main/README.md) — installation,
+- [README.md](https://github.com/DevKang/SwiftGraphDB/blob/main/README.md) — installation,
   examples, design rationale.
-- [CHANGELOG.md](https://github.com/oomool/SwiftGraphDB/blob/main/CHANGELOG.md) — release notes.
-- [CONTRIBUTING.md](https://github.com/oomool/SwiftGraphDB/blob/main/CONTRIBUTING.md) —
+- [CHANGELOG.md](https://github.com/DevKang/SwiftGraphDB/blob/main/CHANGELOG.md) — release notes.
+- [CONTRIBUTING.md](https://github.com/DevKang/SwiftGraphDB/blob/main/CONTRIBUTING.md) —
   how to file bugs and submit PRs.

@@ -49,7 +49,7 @@ post-0.1:
 ## Install
 
 ```swift
-.package(url: "https://github.com/oomool/SwiftGraphDB.git", from: "0.1.0"),
+.package(url: "https://github.com/DevKang/SwiftGraphDB.git", from: "0.1.0"),
 ```
 
 ## Try it

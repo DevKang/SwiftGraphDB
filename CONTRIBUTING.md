@@ -13,7 +13,7 @@ Requirements:
 Clone and build:
 
 ```bash
-git clone https://github.com/oomool/SwiftGraphDB.git
+git clone https://github.com/DevKang/SwiftGraphDB.git
 cd SwiftGraphDB
 swift build
 swift test

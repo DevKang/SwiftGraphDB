@@ -302,7 +302,7 @@ CloudKit adapter package:
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/oomool/SwiftGraphDB", from: "0.1.0")
+    .package(url: "https://github.com/DevKang/SwiftGraphDB", from: "0.1.0")
 ]
 ```
 
@@ -310,7 +310,7 @@ CloudKit adapter, when published:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/oomool/SwiftGraphDBCloudKit", from: "0.1.0")
+    .package(url: "https://github.com/DevKang/SwiftGraphDBCloudKit", from: "0.1.0")
 ]
 ```
 
