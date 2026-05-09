@@ -12,7 +12,7 @@ final class MigrationTests: XCTestCase {
         try MigrationRunner.runDefault(on: store)
 
         let version = try meta(store, key: "schema_version")
-        XCTAssertEqual(version, "2", "default ships v1 + v2; current head is 2")
+        XCTAssertEqual(version, "3", "default ships v1 + v2 + v3; current head is 3")
 
         let graphID = try meta(store, key: "graph_id")
         XCTAssertNotNil(graphID)
@@ -39,7 +39,7 @@ final class MigrationTests: XCTestCase {
         defer { store.close() }
         try MigrationRunner.runDefault(on: store)
         XCTAssertEqual(try meta(store, key: "graph_id"), firstID)
-        XCTAssertEqual(try meta(store, key: "schema_version"), "2")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "3")
     }
 
     // MARK: - Schema shape
@@ -122,17 +122,17 @@ final class MigrationTests: XCTestCase {
         XCTAssertFalse(tables.contains("bar"), "failed migration should not have left tables behind")
     }
 
-    func testHypotheticalMigration3RunsOnceOnNextOpen() throws {
+    func testHypotheticalMigration4RunsOnceOnNextOpen() throws {
         let store = try SQLiteStore.openInMemory()
         defer { store.close() }
 
         try MigrationRunner.runDefault(on: store)
 
         let extended = MigrationRunner(migrations: MigrationRunner.defaultMigrations + [
-            Migration(version: 3, sql: "CREATE TABLE extension_table (id INTEGER PRIMARY KEY)"),
+            Migration(version: 4, sql: "CREATE TABLE extension_table (id INTEGER PRIMARY KEY)"),
         ])
         try extended.run(on: store)
-        XCTAssertEqual(try meta(store, key: "schema_version"), "3")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "4")
 
         // Running again is a no-op.
         try extended.run(on: store)

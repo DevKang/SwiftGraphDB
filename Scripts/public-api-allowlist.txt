@@ -26,8 +26,10 @@ enum RebuildFromSQLite
 enum RecordCodec
 enum RecordCodecError
 enum RepositoryError
+enum SQLFilterOp
 enum SQLValue
 enum SQLiteError
+enum SortOrder
 enum SnapshotBuilder
 enum SnapshotError
 enum SnapshotEvent

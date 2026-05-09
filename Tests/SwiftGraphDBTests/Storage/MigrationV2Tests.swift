@@ -33,7 +33,7 @@ final class MigrationV2Tests: XCTestCase {
     func testFreshOpenStampsSchemaVersion2() throws {
         let store = try openFresh()
         defer { store.close() }
-        XCTAssertEqual(try meta(store, key: "schema_version"), "2")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "3")
     }
 
     func testFreshOpenStampsActorIDOncePerStore() throws {
@@ -134,7 +134,7 @@ final class MigrationV2Tests: XCTestCase {
 
         // Now run all migrations; v1 → v2 backfill must populate revision for existing rows.
         try MigrationRunner.runDefault(on: store)
-        XCTAssertEqual(try meta(store, key: "schema_version"), "2")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "3")
 
         let revisions = try store.query(
             "SELECT revision FROM nodes WHERE id = ?", [.text(id)]
@@ -164,6 +164,6 @@ final class MigrationV2Tests: XCTestCase {
         XCTAssertThrowsError(try runner.run(on: store))
 
         // Migration #2 is committed (it succeeded), but #3 rolled back.
-        XCTAssertEqual(try meta(store, key: "schema_version"), "2")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "3")
     }
 }

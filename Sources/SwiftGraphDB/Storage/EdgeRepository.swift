@@ -18,7 +18,7 @@ public struct EdgeRepository: Sendable {
     public func insert(_ edge: Edge) throws {
         try ensureNodeExists(id: edge.fromID)
         try ensureNodeExists(id: edge.toID)
-        let blob = try PropertyCoding.encode(edge.properties)
+        let json = try PropertyCoding.encodeToString(edge.properties)
         try store.execute(
             """
             INSERT INTO edges (id, type, from_id, to_id, properties, created_at, modified_at, is_deleted, revision)
@@ -29,7 +29,7 @@ public struct EdgeRepository: Sendable {
                 .text(edge.type),
                 .text(edge.fromID.uuidString),
                 .text(edge.toID.uuidString),
-                .blob(blob),
+                .text(json),
                 .real(edge.createdAt.timeIntervalSince1970),
                 .real(edge.modifiedAt.timeIntervalSince1970),
                 .text(try NodeRepository.encodeRevision(edge.revision)),
@@ -80,7 +80,7 @@ public struct EdgeRepository: Sendable {
         }
         var merged = existing.properties
         for (k, v) in patch { merged[k] = v }
-        let blob = try PropertyCoding.encode(merged)
+        let json = try PropertyCoding.encodeToString(merged)
         try store.execute(
             """
             UPDATE edges
@@ -88,7 +88,7 @@ public struct EdgeRepository: Sendable {
             WHERE id = ? AND is_deleted = 0
             """,
             [
-                .blob(blob),
+                .text(json),
                 .real(Date().timeIntervalSince1970),
                 .text(try NodeRepository.encodeRevision(revision)),
                 .text(id.uuidString),
@@ -153,7 +153,7 @@ public struct EdgeRepository: Sendable {
               let type = row.text(at: 1),
               let fromString = row.text(at: 2), let fromID = UUID(uuidString: fromString),
               let toString = row.text(at: 3), let toID = UUID(uuidString: toString),
-              let blob = row.blob(at: 4),
+              let propertiesJSON = row.text(at: 4),
               let createdAtRaw = row.double(at: 5),
               let modifiedAtRaw = row.double(at: 6)
         else {
@@ -173,7 +173,7 @@ public struct EdgeRepository: Sendable {
             type: type,
             fromID: fromID,
             toID: toID,
-            properties: try PropertyCoding.decode(blob),
+            properties: try PropertyCoding.decodeFromString(propertiesJSON),
             createdAt: Date(timeIntervalSince1970: createdAtRaw),
             modifiedAt: Date(timeIntervalSince1970: modifiedAtRaw),
             revision: revision,

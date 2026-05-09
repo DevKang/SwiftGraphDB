@@ -61,7 +61,7 @@ public enum RebuildFromSQLite {
                 let idText = row.text(at: 0),
                 let id = UUID(uuidString: idText),
                 let label = row.text(at: 1),
-                let blob = row.blob(at: 2)
+                let propertiesJSON = row.text(at: 2)
             else {
                 throw RepositoryError.malformedRow
             }
@@ -71,7 +71,7 @@ public enum RebuildFromSQLite {
             // label — small optimisation that matters at 100K-row scale.
             if !propertyIndexSpecs.isEmpty,
                propertyIndexSpecs.contains(where: { $0.label == label }) {
-                let properties = try PropertyCoding.decode(blob)
+                let properties = try PropertyCoding.decodeFromString(propertiesJSON)
                 let node = Node(id: id, label: label, properties: properties)
                 propertyIndex.insert(node)
             }

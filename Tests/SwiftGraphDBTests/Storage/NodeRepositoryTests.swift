@@ -127,7 +127,7 @@ final class NodeRepositoryTests: XCTestCase {
 
     // MARK: - Determinism of property BLOB
 
-    func testPropertyBlobIsDeterministicAcrossInserts() throws {
+    func testPropertyTextIsDeterministicAcrossInserts() throws {
         let (store, repo) = try makeRepo()
         defer { store.close() }
 
@@ -136,9 +136,9 @@ final class NodeRepositoryTests: XCTestCase {
         try repo.insert(a)
         try repo.insert(b)
 
-        let blobs = try store.query("SELECT properties FROM nodes ORDER BY id") { $0.blob(at: 0)! }
-        XCTAssertEqual(blobs.count, 2)
-        XCTAssertEqual(blobs[0], blobs[1], "equal property dictionaries should produce equal BLOBs")
+        let texts = try store.query("SELECT properties FROM nodes ORDER BY id") { $0.text(at: 0)! }
+        XCTAssertEqual(texts.count, 2)
+        XCTAssertEqual(texts[0], texts[1], "equal property dictionaries should produce equal JSON TEXT")
     }
 
     // MARK: - Helpers

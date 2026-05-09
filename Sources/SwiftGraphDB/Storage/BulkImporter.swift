@@ -64,14 +64,14 @@ public struct BulkImporter: Sendable {
         ) throws {
             try ensureAlive()
             let now = Date().timeIntervalSince1970
-            let blob = try PropertyCoding.encode(properties)
+            let json = try PropertyCoding.encodeToString(properties)
             try store!.execute(
                 """
                 INSERT INTO nodes (id, label, properties, created_at, modified_at, is_deleted)
                 VALUES (?, ?, ?, ?, ?, 0)
                 """,
                 [
-                    .text(id.uuidString), .text(label), .blob(blob),
+                    .text(id.uuidString), .text(label), .text(json),
                     .real(now), .real(now),
                 ]
             )
@@ -87,7 +87,7 @@ public struct BulkImporter: Sendable {
         ) throws {
             try ensureAlive()
             let now = Date().timeIntervalSince1970
-            let blob = try PropertyCoding.encode(properties)
+            let json = try PropertyCoding.encodeToString(properties)
             try store!.execute(
                 """
                 INSERT INTO edges (id, type, from_id, to_id, properties, created_at, modified_at, is_deleted)
@@ -96,7 +96,7 @@ public struct BulkImporter: Sendable {
                 [
                     .text(id.uuidString), .text(type),
                     .text(from.uuidString), .text(to.uuidString),
-                    .blob(blob), .real(now), .real(now),
+                    .text(json), .real(now), .real(now),
                 ]
             )
             edgesInserted += 1

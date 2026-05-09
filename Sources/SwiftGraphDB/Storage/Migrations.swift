@@ -45,6 +45,7 @@ public struct MigrationRunner: Sendable {
     public static let defaultMigrations: [Migration] = [
         v1,
         v2,
+        v3,
     ]
 
     private static let v1 = Migration(version: 1, sql: """
@@ -163,6 +164,60 @@ public struct MigrationRunner: Sendable {
             PRIMARY KEY (backend_id, entity_kind, entity_id)
         )
         """)
+    }
+
+    /// Migration #3 — schema v3. Converts `properties` from BLOB to TEXT so that
+    /// `json_extract()` can be used for SQLite-native filtering, sorting, and pagination.
+    /// The existing BLOBs are valid UTF-8 JSON produced by `JSONEncoder`, so `CAST(... AS TEXT)`
+    /// is safe. Tables are rebuilt because SQLite does not support `ALTER COLUMN`.
+    private static let v3 = Migration(version: 3) { store in
+        // -- nodes --
+        try store.execute("""
+        CREATE TABLE nodes_v3 (
+            id          TEXT PRIMARY KEY,
+            label       TEXT NOT NULL,
+            properties  TEXT NOT NULL,
+            created_at  REAL NOT NULL,
+            modified_at REAL NOT NULL,
+            is_deleted  INTEGER NOT NULL DEFAULT 0,
+            revision    TEXT
+        )
+        """)
+        try store.execute("""
+        INSERT INTO nodes_v3 (id, label, properties, created_at, modified_at, is_deleted, revision)
+        SELECT id, label, CAST(properties AS TEXT), created_at, modified_at, is_deleted, revision
+        FROM nodes
+        """)
+        try store.execute("DROP TABLE nodes")
+        try store.execute("ALTER TABLE nodes_v3 RENAME TO nodes")
+        try store.execute("CREATE INDEX idx_nodes_label ON nodes(label) WHERE is_deleted = 0")
+        try store.execute("CREATE INDEX idx_nodes_revision ON nodes(revision)")
+
+        // -- edges --
+        try store.execute("""
+        CREATE TABLE edges_v3 (
+            id          TEXT PRIMARY KEY,
+            type        TEXT NOT NULL,
+            from_id     TEXT NOT NULL REFERENCES nodes(id),
+            to_id       TEXT NOT NULL REFERENCES nodes(id),
+            properties  TEXT NOT NULL,
+            created_at  REAL NOT NULL,
+            modified_at REAL NOT NULL,
+            is_deleted  INTEGER NOT NULL DEFAULT 0,
+            revision    TEXT
+        )
+        """)
+        try store.execute("""
+        INSERT INTO edges_v3 (id, type, from_id, to_id, properties, created_at, modified_at, is_deleted, revision)
+        SELECT id, type, from_id, to_id, CAST(properties AS TEXT), created_at, modified_at, is_deleted, revision
+        FROM edges
+        """)
+        try store.execute("DROP TABLE edges")
+        try store.execute("ALTER TABLE edges_v3 RENAME TO edges")
+        try store.execute("CREATE INDEX idx_edges_from ON edges(from_id) WHERE is_deleted = 0")
+        try store.execute("CREATE INDEX idx_edges_to ON edges(to_id) WHERE is_deleted = 0")
+        try store.execute("CREATE INDEX idx_edges_type ON edges(type) WHERE is_deleted = 0")
+        try store.execute("CREATE INDEX idx_edges_revision ON edges(revision)")
     }
 
     /// Backfill helper for migration #2.

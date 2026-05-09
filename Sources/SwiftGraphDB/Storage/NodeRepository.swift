@@ -19,7 +19,7 @@ public struct NodeRepository: Sendable {
     /// The persisted `revision` matches `node.revision` — callers (the graph actor) are
     /// expected to stamp a real revision before calling.
     public func insert(_ node: Node) throws {
-        let blob = try PropertyCoding.encode(node.properties)
+        let json = try PropertyCoding.encodeToString(node.properties)
         let revisionJSON = try Self.encodeRevision(node.revision)
         try store.execute(
             """
@@ -29,7 +29,7 @@ public struct NodeRepository: Sendable {
             [
                 .text(node.id.uuidString),
                 .text(node.label),
-                .blob(blob),
+                .text(json),
                 .real(node.createdAt.timeIntervalSince1970),
                 .real(node.modifiedAt.timeIntervalSince1970),
                 .text(revisionJSON),
@@ -77,7 +77,7 @@ public struct NodeRepository: Sendable {
         }
         var merged = existing.properties
         for (k, v) in patch { merged[k] = v }
-        let blob = try PropertyCoding.encode(merged)
+        let json = try PropertyCoding.encodeToString(merged)
         try store.execute(
             """
             UPDATE nodes
@@ -85,7 +85,7 @@ public struct NodeRepository: Sendable {
             WHERE id = ? AND is_deleted = 0
             """,
             [
-                .blob(blob),
+                .text(json),
                 .real(Date().timeIntervalSince1970),
                 .text(try Self.encodeRevision(revision)),
                 .text(id.uuidString),
@@ -115,16 +115,16 @@ public struct NodeRepository: Sendable {
 
     // MARK: - Row decoding
 
-    private static func decodeRow(_ row: SQLiteStore.Row) throws -> Node {
+    static func decodeRow(_ row: SQLiteStore.Row) throws -> Node {
         guard let idString = row.text(at: 0), let id = UUID(uuidString: idString),
               let label = row.text(at: 1),
-              let blob = row.blob(at: 2),
+              let propertiesJSON = row.text(at: 2),
               let createdAtRaw = row.double(at: 3),
               let modifiedAtRaw = row.double(at: 4)
         else {
             throw RepositoryError.malformedRow
         }
-        let properties = try PropertyCoding.decode(blob)
+        let properties = try PropertyCoding.decodeFromString(propertiesJSON)
         let revisionJSON = row.text(at: 5)
         let isDeleted = (row.int(at: 6) ?? 0) != 0
         let revision: GraphRevision

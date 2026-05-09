@@ -19,6 +19,11 @@ public struct NodeQuery: Sendable {
         case scan
         case traverse(direction: TraverseDirection, edge: String?, maxDepth: TraverseDepth)
         case filterPredicate(NodeFilter)
+        // SQL-pushdown stages (v3 TEXT properties)
+        case sqlWhere(key: String, op: SQLFilterOp, value: PropertyValue)
+        case sqlContains(key: String, substring: String)
+        case sorted(key: String, order: SortOrder)
+        case limit(count: Int, offset: Int)
     }
 
     /// Append a stage and return a new query (value-type composition).
@@ -66,6 +71,29 @@ public struct NodeQuery: Sendable {
         appending(.filterPredicate(NodeFilter(predicate)))
     }
 
+    // MARK: - SQL-pushdown filters (v3)
+
+    /// Sort results by a property key. Pushed down to SQLite `ORDER BY json_extract(...)`.
+    public func sorted(by key: String, _ order: SortOrder = .ascending) -> NodeQuery {
+        appending(.sorted(key: key, order: order))
+    }
+
+    /// Limit the number of returned nodes, with optional offset for pagination.
+    public func limit(_ count: Int, offset: Int = 0) -> NodeQuery {
+        appending(.limit(count: count, offset: offset))
+    }
+
+    /// String-contains filter. Pushed down to SQLite `LIKE '%substring%'`.
+    public func `where`(_ key: String, contains substring: String) -> NodeQuery {
+        appending(.sqlContains(key: key, substring: substring))
+    }
+
+    /// Property filter pushed down to SQLite `json_extract()`. Use when you want the database
+    /// engine to filter rather than materialising all nodes into Swift first.
+    public func `where`(_ key: String, _ op: SQLFilterOp, _ value: PropertyValue) -> NodeQuery {
+        appending(.sqlWhere(key: key, op: op, value: value))
+    }
+
     // MARK: - Traversal (SPEC §7.4)
 
     /// BFS over `direction`, optionally filtered by edge `type`. Default `maxDepth = 1`.
@@ -76,6 +104,22 @@ public struct NodeQuery: Sendable {
     ) -> NodeQuery {
         appending(.traverse(direction: direction, edge: edge, maxDepth: maxDepth))
     }
+}
+
+/// Comparison operator for SQL-pushdown property filters.
+public enum SQLFilterOp: Sendable, Equatable {
+    case equals
+    case notEquals
+    case greaterThan
+    case greaterThanOrEqual
+    case lessThan
+    case lessThanOrEqual
+}
+
+/// Sort order for query results.
+public enum SortOrder: Sendable, Equatable {
+    case ascending
+    case descending
 }
 
 /// Direction of a traversal step.
