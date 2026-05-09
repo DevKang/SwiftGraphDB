@@ -103,6 +103,32 @@ public final class GraphStore: Sendable {
         try await actor.deleteEdge(id: id)
     }
 
+    // MARK: - Edge reads
+
+    /// Fetch a single edge by ID, or `nil` if it doesn't exist (or is deleted).
+    public func edge(id: EdgeID) async throws -> Edge? {
+        let store = await actor.unsafeStoreForTests
+        return try EdgeRepository(store: store).fetch(id: id)
+    }
+
+    /// All outgoing edges from the given node. Optionally filtered by edge `type`.
+    public func edges(from nodeID: NodeID, type: String? = nil) async throws -> [Edge] {
+        let store = await actor.unsafeStoreForTests
+        return try EdgeRepository(store: store).fetchOutgoing(from: nodeID, type: type)
+    }
+
+    /// All incoming edges to the given node. Optionally filtered by edge `type`.
+    public func edges(to nodeID: NodeID, type: String? = nil) async throws -> [Edge] {
+        let store = await actor.unsafeStoreForTests
+        return try EdgeRepository(store: store).fetchIncoming(to: nodeID, type: type)
+    }
+
+    /// All edges of a given type across the entire graph.
+    public func edges(ofType type: String) async throws -> [Edge] {
+        let store = await actor.unsafeStoreForTests
+        return try EdgeRepository(store: store).fetchAll(type: type)
+    }
+
     // MARK: - Reads
 
     /// Capture an immutable, off-actor snapshot of the in-memory topology. Walked off-actor by
