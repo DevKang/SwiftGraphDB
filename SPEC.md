@@ -564,7 +564,7 @@ Traversal operations:
 .traverse(.outgoing, maxDepth: .unlimited)
 ```
 
-Collect operations:
+Terminal operations:
 
 ```swift
 .collect()
@@ -572,6 +572,15 @@ Collect operations:
 .count()
 .first()
 .exists()
+```
+
+Aggregate operations (SQL-pushdown supported for `sum` and `average`):
+
+```swift
+.sum(of: "age")         // -> Double (0 for empty set)
+.average(of: "score")   // -> Double? (nil for empty set)
+.min(of: "age")         // -> PropertyValue?
+.max(of: "age")         // -> PropertyValue?
 ```
 
 Edge queries follow the same builder pattern via `EdgeQuery`:

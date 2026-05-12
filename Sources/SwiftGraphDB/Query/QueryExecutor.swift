@@ -33,6 +33,113 @@ extension NodeQuery {
         try await first() != nil
     }
 
+    // MARK: - Aggregates
+
+    /// Sum of a numeric property across matching nodes. Returns 0 if no matches.
+    public func sum(of key: String) async throws -> Double {
+        if let pushed = try sqlAggregate("SUM", key: key) {
+            return pushed ?? 0
+        }
+        let nodes = try await collect()
+        return nodes.reduce(0.0) { acc, node in
+            acc + numericValue(node.properties[key])
+        }
+    }
+
+    /// Average of a numeric property across matching nodes. Returns `nil` if no matches.
+    public func average(of key: String) async throws -> Double? {
+        if let pushed = try sqlAggregate("AVG", key: key) {
+            return pushed // nil when empty set
+        }
+        let nodes = try await collect()
+        guard !nodes.isEmpty else { return nil }
+        let sum = nodes.reduce(0.0) { acc, node in
+            acc + numericValue(node.properties[key])
+        }
+        return sum / Double(nodes.count)
+    }
+
+    /// Minimum value of a property across matching nodes. Returns `nil` if no matches.
+    public func min(of key: String) async throws -> PropertyValue? {
+        let nodes = try await collect()
+        return nodes.compactMap { $0.properties[key] }
+            .min { GraphStore.compare($0, $1) == .less }
+    }
+
+    /// Maximum value of a property across matching nodes. Returns `nil` if no matches.
+    public func max(of key: String) async throws -> PropertyValue? {
+        let nodes = try await collect()
+        return nodes.compactMap { $0.properties[key] }
+            .max { GraphStore.compare($0, $1) == .less }
+    }
+
+    // MARK: - Aggregate helpers
+
+    private func numericValue(_ value: PropertyValue?) -> Double {
+        switch value {
+        case .int(let i): return Double(i)
+        case .double(let d): return d
+        default: return 0
+        }
+    }
+
+    /// Try SQL-pushdown for aggregate functions. Returns nil (outer) if pushdown isn't possible.
+    /// The inner optional reflects the SQL result: nil when AVG/SUM returns NULL (empty set).
+    private func sqlAggregate(_ fn: String, key: String) throws -> Double?? {
+        guard !stages.isEmpty else { return nil }
+        let first = stages[0]
+        let labelFilter: String?
+        switch first {
+        case .label(let l): labelFilter = l
+        case .scan:         labelFilter = nil
+        default:            return nil
+        }
+        let rest = Array(stages.dropFirst())
+        for stage in rest {
+            switch stage {
+            case .sqlWhere, .sqlContains: continue
+            default: return nil
+            }
+        }
+        let safeKey = sanitizeJSONKey(key)
+        var clauses: [String] = ["is_deleted = 0"]
+        var bindings: [SQLValue] = []
+        if let labelFilter {
+            clauses.append("label = ?")
+            bindings.append(.text(labelFilter))
+        }
+        for stage in rest {
+            switch stage {
+            case .sqlWhere(let k, let op, let value):
+                let sk = sanitizeJSONKey(k)
+                let opStr = sqlOpString(op)
+                let (typeTag, sqlVal) = sqlValueComponents(for: value)
+                clauses.append("json_extract(properties, '$.\(sk).value') \(opStr) ?")
+                bindings.append(sqlVal)
+                clauses.append("json_extract(properties, '$.\(sk).type') = ?")
+                bindings.append(.text(typeTag))
+            case .sqlContains(let k, let substring):
+                let sk = sanitizeJSONKey(k)
+                let escaped = substring
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "%", with: "\\%")
+                    .replacingOccurrences(of: "_", with: "\\_")
+                clauses.append("json_extract(properties, '$.\(sk).value') LIKE ? ESCAPE '\\'")
+                bindings.append(.text("%\(escaped)%"))
+                clauses.append("json_extract(properties, '$.\(sk).type') = 'string'")
+            default: break
+            }
+        }
+        let sql = """
+            SELECT \(fn)(json_extract(properties, '$.\(safeKey).value'))
+            FROM nodes WHERE \(clauses.joined(separator: " AND "))
+            """
+        let rows = try store.query(sql, bindings) { $0.double(at: 0) }
+        // rows always has exactly one row for aggregate queries.
+        // The inner value is nil when the result set is empty (SQL NULL).
+        return .some(rows.first.flatMap { $0 })
+    }
+
     // MARK: - Internals
 
     struct ExecutionResult {

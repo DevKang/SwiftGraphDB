@@ -76,6 +76,117 @@ public struct EdgeQuery: Sendable {
         try first() != nil
     }
 
+    // MARK: - Aggregates
+
+    /// Sum of a numeric property across matching edges. Returns 0 if no matches.
+    public func sum(of key: String) throws -> Double {
+        if let pushed = try sqlAggregate("SUM", key: key) { return pushed ?? 0 }
+        let edges = try collect()
+        return edges.reduce(0.0) { acc, edge in
+            acc + numericValue(edge.properties[key])
+        }
+    }
+
+    /// Average of a numeric property across matching edges. Returns `nil` if no matches.
+    public func average(of key: String) throws -> Double? {
+        if let pushed = try sqlAggregate("AVG", key: key) { return pushed }
+        let edges = try collect()
+        guard !edges.isEmpty else { return nil }
+        let total = edges.reduce(0.0) { acc, edge in
+            acc + numericValue(edge.properties[key])
+        }
+        return total / Double(edges.count)
+    }
+
+    /// Minimum value of a property across matching edges. Returns `nil` if no matches.
+    public func min(of key: String) throws -> PropertyValue? {
+        let edges = try collect()
+        return edges.compactMap { $0.properties[key] }
+            .min { GraphStore.compare($0, $1) == .less }
+    }
+
+    /// Maximum value of a property across matching edges. Returns `nil` if no matches.
+    public func max(of key: String) throws -> PropertyValue? {
+        let edges = try collect()
+        return edges.compactMap { $0.properties[key] }
+            .max { GraphStore.compare($0, $1) == .less }
+    }
+
+    private func numericValue(_ value: PropertyValue?) -> Double {
+        switch value {
+        case .int(let i): return Double(i)
+        case .double(let d): return d
+        default: return 0
+        }
+    }
+
+    /// Try SQL pushdown for aggregate functions. Outer nil = can't pushdown, inner nil = empty set.
+    private func sqlAggregate(_ fn: String, key: String) throws -> Double?? {
+        guard !stages.isEmpty else { return nil }
+        let first = stages[0]
+
+        var baseClauses: [String] = ["is_deleted = 0"]
+        var baseBindings: [SQLValue] = []
+
+        switch first {
+        case .ofType(let t):
+            baseClauses.append("type = ?")
+            baseBindings.append(.text(t))
+        case .fromNode(let id):
+            baseClauses.append("from_id = ?")
+            baseBindings.append(.text(id.uuidString))
+        case .toNode(let id):
+            baseClauses.append("to_id = ?")
+            baseBindings.append(.text(id.uuidString))
+        case .scan:
+            break
+        default:
+            return nil
+        }
+
+        let rest = Array(stages.dropFirst())
+        for stage in rest {
+            switch stage {
+            case .sqlWhere, .sqlContains: continue
+            default: return nil
+            }
+        }
+
+        var clauses = baseClauses
+        var bindings = baseBindings
+
+        for stage in rest {
+            switch stage {
+            case .sqlWhere(let k, let op, let value):
+                let sk = sanitizeJSONKey(k)
+                let opStr = sqlOpString(op)
+                let (typeTag, sqlVal) = sqlValueComponents(for: value)
+                clauses.append("json_extract(properties, '$.\(sk).value') \(opStr) ?")
+                bindings.append(sqlVal)
+                clauses.append("json_extract(properties, '$.\(sk).type') = ?")
+                bindings.append(.text(typeTag))
+            case .sqlContains(let k, let substring):
+                let sk = sanitizeJSONKey(k)
+                let escaped = substring
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "%", with: "\\%")
+                    .replacingOccurrences(of: "_", with: "\\_")
+                clauses.append("json_extract(properties, '$.\(sk).value') LIKE ? ESCAPE '\\'")
+                bindings.append(.text("%\(escaped)%"))
+                clauses.append("json_extract(properties, '$.\(sk).type') = 'string'")
+            default: break
+            }
+        }
+
+        let safeKey = sanitizeJSONKey(key)
+        let sql = """
+            SELECT \(fn)(json_extract(properties, '$.\(safeKey).value'))
+            FROM edges WHERE \(clauses.joined(separator: " AND "))
+            """
+        let rows = try store.query(sql, bindings) { $0.double(at: 0) }
+        return .some(rows.first.flatMap { $0 })
+    }
+
     // MARK: - SQL pushdown
 
     private func sqlPushdownPath() throws -> [Edge]? {
@@ -205,8 +316,8 @@ public struct EdgeQuery: Sendable {
                     return order == .ascending ? cmp == .less : cmp == .greater
                 }
             case .limit(let count, let offset):
-                let start = min(offset, edges.count)
-                let end = min(start + count, edges.count)
+                let start = Swift.min(offset, edges.count)
+                let end = Swift.min(start + count, edges.count)
                 edges = Array(edges[start..<end])
             default: break
             }
