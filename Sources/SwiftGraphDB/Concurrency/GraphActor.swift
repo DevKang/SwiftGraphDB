@@ -544,6 +544,16 @@ public actor GraphActor {
         try body()
     }
 
+    /// Bulk-insert nodes and edges in a single SQLite transaction, then rebuild in-memory state.
+    /// SPEC §5.5: 20K nodes in under 3 s.
+    @discardableResult
+    public func bulkInsert(_ body: @Sendable (BulkImporter.Batch) throws -> Void) async throws -> BulkImporter.Summary {
+        let importer = BulkImporter(store: store)
+        let summary = try importer.bulkInsert(body)
+        try await rebuild()
+        return summary
+    }
+
     /// Rebuild in-memory state from SQLite. Called when the actor detects drift between
     /// SQLite (source of truth) and in-memory state. Public so `GraphStore.open` can also
     /// trigger an explicit rebuild after a failed snapshot load (M7).

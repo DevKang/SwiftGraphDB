@@ -115,4 +115,31 @@ final class GraphStoreEdgeQueryTests: XCTestCase {
         let allFollows = try await store.edges(ofType: "FOLLOWS")
         XCTAssertEqual(allFollows.count, 1)
     }
+
+    // MARK: - Bulk Insert via GraphStore
+
+    func testBulkInsertViaGraphStore() async throws {
+        let store = try await makeStore()
+        let summary = try await store.bulkInsert { batch in
+            let a = batch.addNode(label: "Person", properties: ["name": .string("Alice")])
+            let b = batch.addNode(label: "Person", properties: ["name": .string("Bob")])
+            let c = batch.addNode(label: "Person", properties: ["name": .string("Cath")])
+            batch.addEdge(from: a, to: b, type: "KNOWS")
+            batch.addEdge(from: b, to: c, type: "KNOWS")
+        }
+
+        XCTAssertEqual(summary.nodesInserted, 3)
+        XCTAssertEqual(summary.edgesInserted, 2)
+
+        // Verify nodes are queryable through the normal query API (in-memory rebuilt)
+        let people = try await store.nodes(labeled: "Person").collect()
+        XCTAssertEqual(people.count, 3)
+
+        // Verify traversal works (in-memory adjacency was rebuilt)
+        let alice = people.first { $0.properties["name"] == .string("Alice") }!
+        let network = try await store.node(id: alice.id)
+            .traverse(.outgoing, edge: "KNOWS", maxDepth: .bounded(2))
+            .collect()
+        XCTAssertEqual(network.count, 2) // Bob and Cath
+    }
 }

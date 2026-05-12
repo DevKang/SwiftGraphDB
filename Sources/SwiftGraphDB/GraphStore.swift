@@ -107,6 +107,13 @@ public final class GraphStore: Sendable {
         try await actor.deleteEdge(id: id)
     }
 
+    /// Bulk-insert nodes and edges in a single SQLite transaction.
+    /// In-memory state is rebuilt after the import completes. SPEC §5.5.
+    @discardableResult
+    public func bulkInsert(_ body: @Sendable (BulkImporter.Batch) throws -> Void) async throws -> BulkImporter.Summary {
+        try await actor.bulkInsert(body)
+    }
+
     // MARK: - Edge reads
 
     /// Fetch a single edge by ID, or `nil` if it doesn't exist (or is deleted).
