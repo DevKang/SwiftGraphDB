@@ -575,6 +575,57 @@ public actor GraphActor {
         try body()
     }
 
+    /// Execute a user-level transaction. All writes inside the closure share a single SQLite
+    /// transaction. In-memory state is updated only after a successful commit; on failure,
+    /// SQLite rolls back and in-memory state is untouched. SPEC §12.8.
+    public func transaction(_ body: @Sendable (GraphTransaction) throws -> Void) async throws {
+        let tx = GraphTransaction(
+            store: store,
+            nodeRepo: nodeRepo,
+            edgeRepo: edgeRepo,
+            journal: ChangeJournalStore(store: store),
+            mintRevision: { [self] in try self.mintRevision() },
+            graphID: { [self] in try self.graphID() }
+        )
+
+        try store.transaction { _ in
+            try body(tx)
+        }
+
+        // SQLite committed — apply deferred in-memory updates.
+        for update in tx.deferredUpdates {
+            switch update.kind {
+            case .addNode(let node):
+                _ = self.indexMap.intern(node.id)
+                self.labelIndex.add(node.id, label: node.label)
+                self.propertyIndex.insert(node)
+
+            case .addEdge(let entry):
+                self.edgeLog.append(entry)
+
+            case .updateNode(let old, let new):
+                self.propertyIndex.update(from: old, to: new)
+                self.propertyCache.remove(old.id)
+
+            case .deleteNode(let id, let label, let old):
+                self.labelIndex.remove(id, label: label)
+                self.propertyIndex.delete(old)
+                self.propertyCache.remove(id)
+                if let i = self.indexMap.internalIndex(for: id) {
+                    self.indexMap.release(i)
+                }
+
+            case .deleteEdge(_, let entry):
+                self.edgeLog.append(entry)
+            }
+        }
+
+        // Emit mutation events after successful commit.
+        for mutation in tx.deferredMutations {
+            emit(mutation)
+        }
+    }
+
     /// Bulk-insert nodes and edges in a single SQLite transaction, then rebuild in-memory state.
     /// SPEC §5.5: 20K nodes in under 3 s.
     @discardableResult

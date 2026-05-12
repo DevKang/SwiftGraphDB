@@ -50,6 +50,7 @@ This follows a pattern used by local-first systems: core data model and change p
 | Launch snapshot | Stable-ish | Format v1 frozen; future versions are accelerator-only |
 | CloudKit adapter | Stable | Shipped as `SwiftGraphDBCloudKit` reference implementation, separate product |
 | Change observation | Stable | `GraphStore.changes()` emits `GraphMutation` events via `AsyncStream` |
+| User-level transactions | Stable | `GraphStore.transaction` groups writes into atomic SQLite transactions |
 | Typed schema layer | Future | Macro vs property-wrapper design deferred to post-0.1 |
 | Query language frontend | Future | Out of scope for the core package |
 
@@ -1071,7 +1072,23 @@ Task {
 
 Events are emitted synchronously inside the actor after the write completes. Ordering matches mutation order.
 
-### 12.7 Schema Declaration (Optional)
+### 12.8 Transactions
+
+`GraphStore.transaction` groups multiple writes into a single atomic SQLite transaction. In-memory state and mutation events are deferred until the transaction commits successfully. If the closure throws, SQLite rolls back and no state changes are visible.
+
+```swift
+try await graph.transaction { tx in
+    let alice = try tx.addNode(label: "Person", properties: ["name": .string("Alice")])
+    let bob = try tx.addNode(label: "Person", properties: ["name": .string("Bob")])
+    _ = try tx.addEdge(from: alice, to: bob, type: "KNOWS")
+    try tx.updateNode(id: alice, properties: ["age": .int(30)])
+}
+// All three writes are visible atomically after the closure returns.
+```
+
+The `GraphTransaction` object provides the same write API as `GraphStore`: `addNode`, `addEdge`, `updateNode`, `updateEdge`, `deleteNode`, `deleteEdge`. Transactions cannot be nested.
+
+### 12.9 Schema Declaration (Optional)
 
 For apps that want compile-time property safety:
 

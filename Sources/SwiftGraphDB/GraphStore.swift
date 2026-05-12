@@ -107,6 +107,14 @@ public final class GraphStore: Sendable {
         try await actor.deleteEdge(id: id)
     }
 
+    /// Execute multiple writes as a single atomic transaction.
+    /// All operations inside the closure share one SQLite transaction.
+    /// On success, in-memory state is updated and mutation events are emitted.
+    /// On failure, SQLite rolls back and no in-memory state changes. SPEC §12.8.
+    public func transaction(_ body: @Sendable (GraphTransaction) throws -> Void) async throws {
+        try await actor.transaction(body)
+    }
+
     /// Bulk-insert nodes and edges in a single SQLite transaction.
     /// In-memory state is rebuilt after the import completes. SPEC §5.5.
     @discardableResult
