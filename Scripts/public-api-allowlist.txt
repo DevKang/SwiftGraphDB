@@ -67,6 +67,7 @@ struct CloudKitRecordID
 struct Edge
 struct EdgeLog
 struct EdgeLogEntry
+struct EdgeQuery
 struct EdgeRecord
 struct EdgeRepository
 struct FieldLevelMergeResolver

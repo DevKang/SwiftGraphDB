@@ -67,6 +67,26 @@ extension GraphStore {
         )
     }
 
+    // MARK: - Edge queries
+
+    /// Query builder for edges of a given type. Supports `.where()`, `.sorted()`, `.limit()` chaining.
+    public func edgeQuery(type: String) async -> EdgeQuery {
+        let store = await storeForQueriesUnsafe
+        return EdgeQuery(store: store, stages: [.ofType(type)])
+    }
+
+    /// Query builder for edges originating from a given node.
+    public func edgeQuery(from nodeID: NodeID) async -> EdgeQuery {
+        let store = await storeForQueriesUnsafe
+        return EdgeQuery(store: store, stages: [.fromNode(nodeID)])
+    }
+
+    /// Query builder for edges targeting a given node.
+    public func edgeQuery(to nodeID: NodeID) async -> EdgeQuery {
+        let store = await storeForQueriesUnsafe
+        return EdgeQuery(store: store, stages: [.toNode(nodeID)])
+    }
+
     /// Cross-type comparable for `PropertyValue` predicates. Same-type comparisons use the
     /// natural order; cross-type returns `.incomparable` (filters reject the row).
     enum CompareResult { case less, equal, greater, incomparable }

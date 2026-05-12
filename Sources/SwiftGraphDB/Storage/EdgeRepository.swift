@@ -151,7 +151,7 @@ public struct EdgeRepository: Sendable {
         }
     }
 
-    private static func decodeRow(_ row: SQLiteStore.Row) throws -> Edge {
+    static func decodeRow(_ row: SQLiteStore.Row) throws -> Edge {
         guard let idString = row.text(at: 0), let id = UUID(uuidString: idString),
               let type = row.text(at: 1),
               let fromString = row.text(at: 2), let fromID = UUID(uuidString: fromString),

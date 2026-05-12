@@ -572,6 +572,16 @@ Collect operations:
 .exists()
 ```
 
+Edge queries follow the same builder pattern via `EdgeQuery`:
+
+```swift
+graph.edgeQuery(type: "KNOWS")
+    .where("since", .greaterThan, .int(2020))
+    .sorted(by: "since", .descending)
+    .limit(10)
+    .collect()
+```
+
 ### 7.2 Execution Model
 
 Queries are executed as a lazy pipeline of operations:
