@@ -49,6 +49,7 @@ This follows a pattern used by local-first systems: core data model and change p
 | EdgeLog compaction | Stable-ish | Merge / tombstone rules covered by tests; tunables may move |
 | Launch snapshot | Stable-ish | Format v1 frozen; future versions are accelerator-only |
 | CloudKit adapter | Stable | Shipped as `SwiftGraphDBCloudKit` reference implementation, separate product |
+| Change observation | Stable | `GraphStore.changes()` emits `GraphMutation` events via `AsyncStream` |
 | Typed schema layer | Future | Macro vs property-wrapper design deferred to post-0.1 |
 | Query language frontend | Future | Out of scope for the core package |
 
@@ -1041,7 +1042,36 @@ for await status in graph.syncStatus {
 try await graph.syncNow(backendID: "cloudkit-private")
 ```
 
-### 12.6 Schema Declaration (Optional)
+### 12.6 Change Observation
+
+`GraphStore.changes()` returns an `AsyncStream<GraphMutation>` that emits events for every write operation. Multiple subscribers are supported; each call creates an independent stream. Drop the stream to unsubscribe.
+
+```swift
+let stream = await graph.changes()
+
+Task {
+    for await mutation in stream {
+        switch mutation {
+        case .nodeAdded(let id, let label):
+            print("Node \(id) (\(label)) added")
+        case .nodeUpdated(let id):
+            print("Node \(id) updated")
+        case .nodeDeleted(let id):
+            print("Node \(id) deleted")
+        case .edgeAdded(let id, let type, let from, let to):
+            print("Edge \(id) (\(type)) \(from)->\(to) added")
+        case .edgeUpdated(let id):
+            print("Edge \(id) updated")
+        case .edgeDeleted(let id):
+            print("Edge \(id) deleted")
+        }
+    }
+}
+```
+
+Events are emitted synchronously inside the actor after the write completes. Ordering matches mutation order.
+
+### 12.7 Schema Declaration (Optional)
 
 For apps that want compile-time property safety:
 

@@ -114,6 +114,16 @@ public final class GraphStore: Sendable {
         try await actor.bulkInsert(body)
     }
 
+    // MARK: - Change observation
+
+    /// Returns an `AsyncStream` of mutation events emitted by this store.
+    /// Each call creates an independent subscriber; drop the returned stream to stop receiving.
+    /// SPEC §12.6.
+    public func changes() async -> AsyncStream<GraphMutation> {
+        let (stream, _) = await actor.observeMutations()
+        return stream
+    }
+
     // MARK: - Edge reads
 
     /// Fetch a single edge by ID, or `nil` if it doesn't exist (or is deleted).

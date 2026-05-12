@@ -18,6 +18,7 @@ enum GraphActorError
 enum GraphChangeError
 enum GraphConflictResolution
 enum GraphEntityKind
+enum GraphMutation
 enum GraphOperation
 enum InMemorySyncError
 enum MemoryPressureLevel

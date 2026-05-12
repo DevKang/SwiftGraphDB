@@ -34,8 +34,33 @@ public actor GraphActor {
     /// Local graph identity, hydrated lazily from `db_meta.graph_id`. Stamped onto every
     /// `change_journal` row so adapters can attribute changes to the right store.
     private var graphIDCache: GraphID?
+    /// Continuations that receive mutation events. Multiple observers are supported.
+    private var mutationContinuations: [UUID: AsyncStream<GraphMutation>.Continuation] = [:]
 
     private var journal: ChangeJournalStore { ChangeJournalStore(store: store) }
+
+    /// Emit a mutation event to all registered observers.
+    private func emit(_ mutation: GraphMutation) {
+        for (_, continuation) in mutationContinuations {
+            continuation.yield(mutation)
+        }
+    }
+
+    /// Register a new mutation observer stream. Returns the stream and an ID to unregister.
+    public func observeMutations() -> (stream: AsyncStream<GraphMutation>, id: UUID) {
+        let id = UUID()
+        let stream = AsyncStream<GraphMutation> { continuation in
+            self.mutationContinuations[id] = continuation
+            continuation.onTermination = { @Sendable [weak self] _ in
+                Task { [weak self] in await self?.removeContinuation(id) }
+            }
+        }
+        return (stream, id)
+    }
+
+    private func removeContinuation(_ id: UUID) {
+        mutationContinuations.removeValue(forKey: id)
+    }
 
     private func mintRevision() throws -> GraphRevision {
         if actorIDCache == nil {
@@ -299,6 +324,7 @@ public actor GraphActor {
         } catch {
             try await rebuild()
         }
+        emit(.nodeAdded(id, label: label))
         return id
     }
 
@@ -347,6 +373,7 @@ public actor GraphActor {
         } catch {
             try await rebuild()
         }
+        emit(.edgeAdded(edgeID, type: type, from: from, to: to))
         return edgeID
     }
 
@@ -386,6 +413,7 @@ public actor GraphActor {
         } catch {
             try await rebuild()
         }
+        emit(.nodeUpdated(id))
     }
 
     public func updateEdge(id: EdgeID, properties: [String: PropertyValue]) async throws {
@@ -417,6 +445,7 @@ public actor GraphActor {
                 ))
             }
         }
+        emit(.edgeUpdated(id))
     }
 
     public func deleteNode(id: NodeID) async throws {
@@ -453,6 +482,7 @@ public actor GraphActor {
         } catch {
             try await rebuild()
         }
+        emit(.nodeDeleted(id))
     }
 
     public func deleteEdge(id: EdgeID) async throws {
@@ -489,6 +519,7 @@ public actor GraphActor {
         } catch {
             try await rebuild()
         }
+        emit(.edgeDeleted(id))
     }
 
     // MARK: - Test seams
