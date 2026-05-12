@@ -89,6 +89,30 @@ final class GraphStoreEdgeQueryTests: XCTestCase {
         XCTAssertEqual(edge?.properties["note"], .string("updated")) // added
     }
 
+    func testUpdateEdgeNullRemovesKey() async throws {
+        let store = try await makeStore()
+        let a = try await store.addNode(label: "N")
+        let b = try await store.addNode(label: "N")
+        let edgeID = try await store.addEdge(from: a, to: b, type: "T", properties: ["x": .int(1), "y": .int(2)])
+
+        try await store.updateEdge(id: edgeID, properties: ["y": .null])
+
+        let edge = try await store.edge(id: edgeID)
+        XCTAssertEqual(edge?.properties["x"], .int(1))
+        XCTAssertNil(edge?.properties["y"], ".null should remove the key")
+    }
+
+    func testUpdateNodeNullRemovesKey() async throws {
+        let store = try await makeStore()
+        let id = try await store.addNode(label: "N", properties: ["a": .string("keep"), "b": .string("remove")])
+
+        try await store.updateNode(id: id, properties: ["b": .null])
+
+        let node = try await store.node(id: id).first()
+        XCTAssertEqual(node?.properties["a"], .string("keep"))
+        XCTAssertNil(node?.properties["b"], ".null should remove the key")
+    }
+
     func testUpdateEdgeNonExistentThrows() async throws {
         let store = try await makeStore()
         let fakeID = UUID()

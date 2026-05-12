@@ -79,7 +79,10 @@ public struct EdgeRepository: Sendable {
             throw RepositoryError.notFound(id: id.uuidString)
         }
         var merged = existing.properties
-        for (k, v) in patch { merged[k] = v }
+        for (k, v) in patch {
+            if case .null = v { merged.removeValue(forKey: k) }
+            else { merged[k] = v }
+        }
         let json = try PropertyCoding.encodeToString(merged)
         try store.execute(
             """

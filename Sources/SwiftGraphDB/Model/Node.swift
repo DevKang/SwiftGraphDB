@@ -36,11 +36,15 @@ public struct Node: Sendable {
     }
 
     /// Returns a copy with the given properties merged in. Existing keys are overwritten;
-    /// other keys are preserved. `modifiedAt` is bumped; `revision` is intentionally
-    /// preserved — the commit path is responsible for stamping a fresh revision.
+    /// other keys are preserved. Setting a value to `.null` removes the key.
+    /// `modifiedAt` is bumped; `revision` is intentionally preserved — the commit path
+    /// is responsible for stamping a fresh revision.
     public func with(properties patch: [String: PropertyValue]) -> Node {
         var merged = self.properties
-        for (k, v) in patch { merged[k] = v }
+        for (k, v) in patch {
+            if case .null = v { merged.removeValue(forKey: k) }
+            else { merged[k] = v }
+        }
         return Node(
             id: id,
             label: label,

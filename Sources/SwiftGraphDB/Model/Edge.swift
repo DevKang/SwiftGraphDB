@@ -37,9 +37,13 @@ public struct Edge: Sendable {
         self.isDeleted = isDeleted
     }
 
+    /// Merge `patch` into edge properties. Setting a value to `.null` removes the key.
     public func with(properties patch: [String: PropertyValue]) -> Edge {
         var merged = self.properties
-        for (k, v) in patch { merged[k] = v }
+        for (k, v) in patch {
+            if case .null = v { merged.removeValue(forKey: k) }
+            else { merged[k] = v }
+        }
         return Edge(
             id: id,
             type: type,

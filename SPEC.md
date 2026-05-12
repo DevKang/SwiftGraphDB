@@ -967,8 +967,11 @@ let id = try await graph.addNode(
 
 let node = try await graph.node(id: id)
 try await graph.updateNode(id: id, properties: ["age": .int(33)])
+try await graph.updateNode(id: id, properties: ["temp": .null])  // removes the "temp" key
 try await graph.deleteNode(id: id)
 ```
+
+Setting a property value to `.null` in an update removes the key entirely from the node or edge. This convention applies to both `updateNode` and `updateEdge`.
 
 Deletes are soft deletes at the persistence layer. Physical cleanup is governed by tombstone retention.
 

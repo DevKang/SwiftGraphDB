@@ -86,6 +86,20 @@ final class NodeRepositoryTests: XCTestCase {
         XCTAssertGreaterThan(updated.modifiedAt, original.modifiedAt)
     }
 
+    func testUpdateWithNullRemovesKey() throws {
+        let (store, repo) = try makeRepo()
+        defer { store.close() }
+        let node = Node(label: "Person", properties: ["name": "Alice", "age": 32, "temp": "remove-me"])
+        try repo.insert(node)
+
+        try repo.update(id: node.id, properties: ["temp": .null], revision: nextRev())
+
+        let updated = try repo.fetch(id: node.id)!
+        XCTAssertEqual(updated.properties["name"], "Alice")
+        XCTAssertEqual(updated.properties["age"], 32)
+        XCTAssertNil(updated.properties["temp"], ".null should remove the key")
+    }
+
     // MARK: - Delete
 
     func testSoftDeleteHidesNodeFromFetch() throws {
