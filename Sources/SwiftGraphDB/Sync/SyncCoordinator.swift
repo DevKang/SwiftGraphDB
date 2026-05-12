@@ -9,6 +9,8 @@ public actor SyncCoordinator {
     public let transport: GraphSyncTransport
     public let resolver: GraphConflictResolver
     private let graph: GraphActor
+    /// Optional handler called when a conflict is detected during pull, before resolution.
+    public var onConflict: (@Sendable (GraphConflict) -> Void)?
 
     public init(
         graph: GraphActor,
@@ -19,6 +21,10 @@ public actor SyncCoordinator {
         self.transport = transport
         self.resolver = resolver
         self.backendID = transport.backendID
+    }
+
+    public func setOnConflict(_ handler: @escaping @Sendable (GraphConflict) -> Void) {
+        self.onConflict = handler
     }
 
     /// One full sync round. Returns the count of (pushed, applied) changes.
@@ -115,8 +121,10 @@ public actor SyncCoordinator {
             // Trivial fast path — no local divergence, just accept the remote.
             resolution = .useRemote
         } else if change.operation == .delete && localChanged {
+            onConflict?(conflict)
             resolution = try await resolver.resolve(conflict)
         } else if change.operation == .upsert && localChanged {
+            onConflict?(conflict)
             resolution = try await resolver.resolve(conflict)
         } else {
             // Local also nil; remote delete just confirms the absent state.

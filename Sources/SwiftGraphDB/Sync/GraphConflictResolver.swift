@@ -1,7 +1,7 @@
 import Foundation
 
 /// Three-way conflict context: base (last common synced) + local + remote payloads.
-public struct GraphConflict: Sendable {
+public struct GraphConflict: Sendable, Equatable {
     public let backendID: SyncBackendID
     public let entity: GraphEntityRef
     public let base: GraphRecordPayload?

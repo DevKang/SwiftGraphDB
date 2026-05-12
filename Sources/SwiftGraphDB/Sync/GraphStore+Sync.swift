@@ -5,6 +5,7 @@ public enum SyncStatus: Sendable, Equatable {
     case idle
     case syncing(SyncBackendID)
     case offline(SyncBackendID)
+    case conflict(GraphConflict)
     case error(SyncBackendID, String)
 }
 
@@ -17,9 +18,14 @@ extension GraphStore {
         transport: GraphSyncTransport,
         resolver: GraphConflictResolver
     ) async throws {
-        await registry.register(
+        let coordinator = SyncCoordinator(graph: actor, transport: transport, resolver: resolver)
+        let reg = await registry
+        await coordinator.setOnConflict { conflict in
+            reg.setStatus(.conflict(conflict))
+        }
+        await reg.register(
             backendID: transport.backendID,
-            coordinator: SyncCoordinator(graph: actor, transport: transport, resolver: resolver)
+            coordinator: coordinator
         )
     }
 

@@ -1018,6 +1018,8 @@ for await status in graph.syncStatus {
         showSyncIndicator(backendID)
     case .conflict(let conflict):
         presentConflict(conflict)
+    case .offline(let backendID):
+        showOfflineIndicator(backendID)
     case .error(let backendID, let error):
         handleSyncError(backendID, error)
     }
