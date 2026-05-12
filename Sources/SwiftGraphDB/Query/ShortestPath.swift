@@ -76,4 +76,64 @@ extension GraphStore {
         }
         return GraphPath(nodes: nodes, edges: pathEdges)
     }
+
+    /// All simple paths (no repeated nodes) from `from` to `to`, up to `maxDepth` edges.
+    /// Uses DFS with backtracking. SPEC §7.3.
+    public func allPaths(
+        from: NodeID,
+        to: NodeID,
+        maxDepth: Int,
+        via edgeType: String? = nil
+    ) async throws -> [GraphPath] {
+        let nodeRepo = NodeRepository(store: await storeForQueriesUnsafe)
+        let edgeRepo = EdgeRepository(store: await storeForQueriesUnsafe)
+
+        guard try nodeRepo.fetch(id: from) != nil else { return [] }
+        guard try nodeRepo.fetch(id: to) != nil else { return [] }
+
+        var results: [([NodeID], [Edge])] = []
+        var visited: Set<NodeID> = [from]
+        var pathNodes: [NodeID] = [from]
+        var pathEdges: [Edge] = []
+
+        func dfs(_ current: NodeID, depth: Int) throws {
+            if current == to {
+                results.append((pathNodes, pathEdges))
+                return
+            }
+            guard depth < maxDepth else { return }
+
+            let outgoing = try edgeRepo.fetchOutgoing(from: current, type: edgeType)
+            for edge in outgoing where !visited.contains(edge.toID) {
+                visited.insert(edge.toID)
+                pathNodes.append(edge.toID)
+                pathEdges.append(edge)
+
+                try dfs(edge.toID, depth: depth + 1)
+
+                pathNodes.removeLast()
+                pathEdges.removeLast()
+                visited.remove(edge.toID)
+            }
+        }
+
+        try dfs(from, depth: 0)
+
+        // Materialise Node objects for each path.
+        var nodeCache: [NodeID: Node] = [:]
+        return try results.compactMap { (ids, edges) -> GraphPath? in
+            var nodes: [Node] = []
+            for id in ids {
+                if let cached = nodeCache[id] {
+                    nodes.append(cached)
+                } else if let node = try nodeRepo.fetch(id: id) {
+                    nodeCache[id] = node
+                    nodes.append(node)
+                } else {
+                    return nil
+                }
+            }
+            return GraphPath(nodes: nodes, edges: edges)
+        }
+    }
 }
