@@ -19,6 +19,16 @@ public struct LabelIndex: Sendable {
         for (id, label) in rows { add(id, label: label) }
     }
 
+    /// Add a node under all of its labels.
+    public mutating func addAll(_ id: NodeID, labels: Set<String>) {
+        for label in labels { add(id, label: label) }
+    }
+
+    /// Remove a node from all of its labels.
+    public mutating func removeAll(_ id: NodeID, labels: Set<String>) {
+        for label in labels { remove(id, label: label) }
+    }
+
     /// Returns the set of live node ids carrying `label`. Empty set (not nil) for unknown
     /// labels so callers don't need an extra branch.
     public func nodes(labeled label: String) -> Set<NodeID> {

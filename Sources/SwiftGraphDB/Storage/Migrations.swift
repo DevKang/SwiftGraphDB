@@ -46,6 +46,7 @@ public struct MigrationRunner: Sendable {
         v1,
         v2,
         v3,
+        v4,
     ]
 
     private static let v1 = Migration(version: 1, sql: """
@@ -218,6 +219,14 @@ public struct MigrationRunner: Sendable {
         try store.execute("CREATE INDEX idx_edges_to ON edges(to_id) WHERE is_deleted = 0")
         try store.execute("CREATE INDEX idx_edges_type ON edges(type) WHERE is_deleted = 0")
         try store.execute("CREATE INDEX idx_edges_revision ON edges(revision)")
+    }
+
+    /// Migration #4 — schema v4. Adds `labels` TEXT column (JSON array) for multi-label support.
+    /// The primary label in the `label` column is preserved. Existing rows get `labels` set to
+    /// a single-element JSON array wrapping the existing label.
+    private static let v4 = Migration(version: 4) { store in
+        try store.execute("ALTER TABLE nodes ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
+        try store.execute("UPDATE nodes SET labels = json_array(label)")
     }
 
     /// Backfill helper for migration #2.

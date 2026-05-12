@@ -51,6 +51,7 @@ This follows a pattern used by local-first systems: core data model and change p
 | CloudKit adapter | Stable | Shipped as `SwiftGraphDBCloudKit` reference implementation, separate product |
 | Change observation | Stable | `GraphStore.changes()` emits `GraphMutation` events via `AsyncStream` |
 | User-level transactions | Stable | `GraphStore.transaction` groups writes into atomic SQLite transactions |
+| Multi-label nodes | Stable | Nodes support multiple labels with add/remove after creation |
 | Typed schema layer | Future | Macro vs property-wrapper design deferred to post-0.1 |
 | Query language frontend | Future | Out of scope for the core package |
 
@@ -188,14 +189,15 @@ A node represents an entity. Every node has:
 | Field | Type | Description |
 |---|---|---|
 | `id` | `NodeID` | Globally unique identifier, assigned on creation |
-| `label` | `String` | Primary type label such as `"Person"` or `"Concept"` |
+| `label` | `String` | Primary label (computed: alphabetically first of `labels`) |
+| `labels` | `Set<String>` | All labels assigned to this node. Must contain at least one. |
 | `properties` | `[String: PropertyValue]` | Arbitrary key-value pairs |
 | `createdAt` | `Date` | Timestamp of creation |
 | `modifiedAt` | `Date` | Timestamp of last modification |
 | `revision` | `GraphRevision` | Local logical revision for sync and conflict detection |
 | `isDeleted` | `Bool` | Tombstone marker for local deletion and sync propagation |
 
-Initial implementation supports one label per node. Multi-label support is intentionally deferred until clear use cases emerge, because it complicates indexing, API design, and sync conflict behavior.
+Nodes support multiple labels. The `label` property is a backward-compatible computed accessor returning the alphabetically first label. Labels can be added or removed after creation, but a node must always retain at least one label. Queries match any label — `nodes(labeled: "Person")` returns nodes that have "Person" in their `labels` set, regardless of other labels.
 
 ### 3.2 Edges
 
@@ -341,6 +343,7 @@ The local database uses SQLite in WAL mode with the following core schema.
 CREATE TABLE nodes (
     id          TEXT PRIMARY KEY,
     label       TEXT NOT NULL,
+    labels      TEXT NOT NULL DEFAULT '[]',
     properties  TEXT NOT NULL,
     created_at  REAL NOT NULL,
     modified_at REAL NOT NULL,
@@ -993,6 +996,22 @@ try await graph.deleteNode(id: id)
 ```
 
 Setting a property value to `.null` in an update removes the key entirely from the node or edge. This convention applies to both `updateNode` and `updateEdge`.
+
+#### Multi-label operations
+
+```swift
+// Create with multiple labels
+let id = try await graph.addNode(
+    labels: ["Person", "Employee"],
+    properties: ["name": .string("Alice")]
+)
+
+// Add/remove labels after creation
+try await graph.addLabel("Manager", to: id)
+try await graph.removeLabel("Employee", from: id)  // must retain ≥ 1
+```
+
+Adding a label that already exists is a no-op. Removing a label the node doesn't have is also a no-op. Attempting to remove the last label throws `RepositoryError.lastLabelRemoval`.
 
 Deletes are soft deletes at the persistence layer. Physical cleanup is governed by tombstone retention.
 

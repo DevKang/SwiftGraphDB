@@ -227,7 +227,7 @@ public actor GraphActor {
                 )
                 try store.transaction { _ in try nodeRepo.insert(node) }
                 _ = self.indexMap.intern(change.entity.id)
-                self.labelIndex.add(change.entity.id, label: label)
+                self.labelIndex.addAll(change.entity.id, labels: node.labels)
                 self.propertyIndex.insert(node)
             }
         case (.node, .delete):
@@ -291,10 +291,15 @@ public actor GraphActor {
 
     @discardableResult
     public func addNode(label: String, properties: [String: PropertyValue]) async throws -> NodeID {
+        try await addNode(labels: [label], properties: properties)
+    }
+
+    @discardableResult
+    public func addNode(labels: Set<String>, properties: [String: PropertyValue]) async throws -> NodeID {
         let id = IDFactory.live.nodeID()
         let revision = try mintRevision()
-        let node = Node(id: id, label: label, properties: properties, revision: revision)
-        let payload = try JSONEncoder().encode(GraphRecordPayload(properties: properties, label: label))
+        let node = Node(id: id, labels: labels, properties: properties, revision: revision)
+        let payload = try JSONEncoder().encode(GraphRecordPayload(properties: properties, label: node.label))
         let graphID = try graphID()
 
         try sqliteOrFail {
@@ -318,13 +323,13 @@ public actor GraphActor {
         do {
             try inMemoryOrFail {
                 _ = self.indexMap.intern(id)
-                self.labelIndex.add(id, label: label)
+                self.labelIndex.addAll(id, labels: labels)
                 self.propertyIndex.insert(node)
             }
         } catch {
             try await rebuild()
         }
-        emit(.nodeAdded(id, label: label))
+        emit(.nodeAdded(id, label: node.label))
         return id
     }
 
@@ -416,6 +421,62 @@ public actor GraphActor {
         emit(.nodeUpdated(id))
     }
 
+    /// Add a label to an existing node.
+    public func addLabel(_ label: String, to id: NodeID) async throws {
+        let revision = try mintRevision()
+        let graphID = try graphID()
+        guard let existing = try nodeRepo.fetch(id: id) else {
+            throw RepositoryError.notFound(id: id.uuidString)
+        }
+        guard !existing.labels.contains(label) else { return } // already has it
+
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try nodeRepo.addLabel(label, to: id, revision: revision)
+                let merged = existing.labels.union([label])
+                let payload = try JSONEncoder().encode(
+                    GraphRecordPayload(properties: existing.properties, label: merged.sorted().first ?? label)
+                )
+                try journal.append(ChangeJournalRow(
+                    sequence: 0, changeID: ChangeID(), graphID: graphID,
+                    actorID: revision.actorID, entityKind: .node, entityID: id,
+                    operation: .upsert, payload: payload,
+                    baseRevision: existing.revision, revision: revision, createdAt: Date()
+                ))
+            }
+        }
+        self.labelIndex.add(id, label: label)
+        emit(.nodeUpdated(id))
+    }
+
+    /// Remove a label from an existing node. The node must retain at least one label.
+    public func removeLabel(_ label: String, from id: NodeID) async throws {
+        let revision = try mintRevision()
+        let graphID = try graphID()
+        guard let existing = try nodeRepo.fetch(id: id) else {
+            throw RepositoryError.notFound(id: id.uuidString)
+        }
+        guard existing.labels.contains(label) else { return } // doesn't have it
+
+        try sqliteOrFail {
+            try store.transaction { _ in
+                try nodeRepo.removeLabel(label, from: id, revision: revision)
+                let remaining = existing.labels.subtracting([label])
+                let payload = try JSONEncoder().encode(
+                    GraphRecordPayload(properties: existing.properties, label: remaining.sorted().first ?? "")
+                )
+                try journal.append(ChangeJournalRow(
+                    sequence: 0, changeID: ChangeID(), graphID: graphID,
+                    actorID: revision.actorID, entityKind: .node, entityID: id,
+                    operation: .upsert, payload: payload,
+                    baseRevision: existing.revision, revision: revision, createdAt: Date()
+                ))
+            }
+        }
+        self.labelIndex.remove(id, label: label)
+        emit(.nodeUpdated(id))
+    }
+
     public func updateEdge(id: EdgeID, properties: [String: PropertyValue]) async throws {
         guard let existing = try edgeRepo.fetch(id: id) else {
             throw RepositoryError.notFound(id: id.uuidString)
@@ -472,7 +533,7 @@ public actor GraphActor {
         }
         do {
             try inMemoryOrFail {
-                self.labelIndex.remove(id, label: existing.label)
+                self.labelIndex.removeAll(id, labels: existing.labels)
                 self.propertyIndex.delete(existing)
                 self.propertyCache.remove(id)
                 if let i = self.indexMap.internalIndex(for: id) {
@@ -597,7 +658,7 @@ public actor GraphActor {
             switch update.kind {
             case .addNode(let node):
                 _ = self.indexMap.intern(node.id)
-                self.labelIndex.add(node.id, label: node.label)
+                self.labelIndex.addAll(node.id, labels: node.labels)
                 self.propertyIndex.insert(node)
 
             case .addEdge(let entry):
@@ -607,8 +668,8 @@ public actor GraphActor {
                 self.propertyIndex.update(from: old, to: new)
                 self.propertyCache.remove(old.id)
 
-            case .deleteNode(let id, let label, let old):
-                self.labelIndex.remove(id, label: label)
+            case .deleteNode(let id, _, let old):
+                self.labelIndex.removeAll(id, labels: old.labels)
                 self.propertyIndex.delete(old)
                 self.propertyCache.remove(id)
                 if let i = self.indexMap.internalIndex(for: id) {

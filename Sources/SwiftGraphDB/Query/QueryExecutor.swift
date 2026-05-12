@@ -105,7 +105,8 @@ extension NodeQuery {
         var clauses: [String] = ["is_deleted = 0"]
         var bindings: [SQLValue] = []
         if let labelFilter {
-            clauses.append("label = ?")
+            clauses.append("(label = ? OR EXISTS (SELECT 1 FROM json_each(labels) WHERE json_each.value = ?))")
+            bindings.append(.text(labelFilter))
             bindings.append(.text(labelFilter))
         }
         for stage in rest {
@@ -194,7 +195,8 @@ extension NodeQuery {
         var limitClause: String?
 
         if let label {
-            clauses.append("label = ?")
+            clauses.append("(label = ? OR EXISTS (SELECT 1 FROM json_each(labels) WHERE json_each.value = ?))")
+            bindings.append(.text(label))
             bindings.append(.text(label))
         }
 
@@ -237,7 +239,7 @@ extension NodeQuery {
         }
 
         var sql = """
-            SELECT id, label, properties, created_at, modified_at, revision, is_deleted
+            SELECT id, label, properties, created_at, modified_at, revision, is_deleted, labels
             FROM nodes WHERE \(clauses.joined(separator: " AND "))
             """
         if let orderBy { sql += " \(orderBy)" }

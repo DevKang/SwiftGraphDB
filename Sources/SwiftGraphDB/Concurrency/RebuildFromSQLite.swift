@@ -52,7 +52,7 @@ public enum RebuildFromSQLite {
         var nodesProcessed = 0
         try store.forEach(
             """
-            SELECT id, label, properties
+            SELECT id, label, properties, labels
             FROM nodes
             WHERE is_deleted = 0
             """
@@ -66,13 +66,24 @@ public enum RebuildFromSQLite {
                 throw RepositoryError.malformedRow
             }
             _ = indexMap.intern(id)
-            labelIndex.add(id, label: label)
+            // Decode multi-label array if present, else fall back to single label.
+            let labelsJSON = row.text(at: 3)
+            let allLabels: Set<String>
+            if let labelsJSON,
+               let data = labelsJSON.data(using: .utf8),
+               let arr = try? JSONDecoder().decode([String].self, from: data),
+               !arr.isEmpty {
+                allLabels = Set(arr)
+            } else {
+                allLabels = [label]
+            }
+            labelIndex.addAll(id, labels: allLabels)
             // Decoding properties is required only when at least one property index covers this
             // label — small optimisation that matters at 100K-row scale.
             if !propertyIndexSpecs.isEmpty,
-               propertyIndexSpecs.contains(where: { $0.label == label }) {
+               propertyIndexSpecs.contains(where: { allLabels.contains($0.label) }) {
                 let properties = try PropertyCoding.decodeFromString(propertiesJSON)
-                let node = Node(id: id, label: label, properties: properties)
+                let node = Node(id: id, labels: allLabels, properties: properties)
                 propertyIndex.insert(node)
             }
             nodesProcessed += 1

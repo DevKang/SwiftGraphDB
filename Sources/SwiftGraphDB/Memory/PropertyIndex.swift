@@ -48,14 +48,14 @@ public struct PropertyIndex: Sendable {
     }
 
     public mutating func insert(_ node: Node) {
-        for spec in specs where spec.label == node.label {
+        for spec in specs where node.labels.contains(spec.label) {
             guard let value = node.properties[spec.property] else { continue }
             buckets[spec, default: [:]][value, default: []].insert(node.id)
         }
     }
 
     public mutating func delete(_ node: Node) {
-        for spec in specs where spec.label == node.label {
+        for spec in specs where node.labels.contains(spec.label) {
             guard let value = node.properties[spec.property] else { continue }
             removeFromBucket(spec: spec, value: value, id: node.id)
         }
@@ -65,12 +65,11 @@ public struct PropertyIndex: Sendable {
     /// `to` may have absent / different values for the indexed properties; we patch each spec
     /// independently.
     public mutating func update(from old: Node, to new: Node) {
-        // Label may have changed too; remove for old.label, add for new.label.
         for spec in specs {
-            let oldValue = (spec.label == old.label) ? old.properties[spec.property] : nil
-            let newValue = (spec.label == new.label) ? new.properties[spec.property] : nil
+            let oldValue = old.labels.contains(spec.label) ? old.properties[spec.property] : nil
+            let newValue = new.labels.contains(spec.label) ? new.properties[spec.property] : nil
 
-            if oldValue == newValue, old.label == new.label { continue }
+            if oldValue == newValue, old.labels == new.labels { continue }
 
             if let oldValue {
                 removeFromBucket(spec: spec, value: oldValue, id: old.id)

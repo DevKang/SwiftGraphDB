@@ -21,14 +21,16 @@ public struct NodeRepository: Sendable {
     public func insert(_ node: Node) throws {
         let json = try PropertyCoding.encodeToString(node.properties)
         let revisionJSON = try Self.encodeRevision(node.revision)
+        let labelsJSON = try Self.encodeLabels(node.labels)
         try store.execute(
             """
-            INSERT INTO nodes (id, label, properties, created_at, modified_at, is_deleted, revision)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
+            INSERT INTO nodes (id, label, labels, properties, created_at, modified_at, is_deleted, revision)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
             """,
             [
                 .text(node.id.uuidString),
                 .text(node.label),
+                .text(labelsJSON),
                 .text(json),
                 .real(node.createdAt.timeIntervalSince1970),
                 .real(node.modifiedAt.timeIntervalSince1970),
@@ -43,7 +45,7 @@ public struct NodeRepository: Sendable {
     public func fetch(id: NodeID) throws -> Node? {
         let rows = try store.query(
             """
-            SELECT id, label, properties, created_at, modified_at, revision, is_deleted
+            SELECT id, label, properties, created_at, modified_at, revision, is_deleted, labels
             FROM nodes
             WHERE id = ? AND is_deleted = 0
             """,
@@ -52,15 +54,18 @@ public struct NodeRepository: Sendable {
         return rows.first
     }
 
-    /// Fetch every live node with the given label. Uses the `idx_nodes_label` partial index.
+    /// Fetch every live node with the given label. Checks both primary `label` and `labels` array.
     public func fetchAll(label: String) throws -> [Node] {
         try store.query(
             """
-            SELECT id, label, properties, created_at, modified_at, revision, is_deleted
+            SELECT id, label, properties, created_at, modified_at, revision, is_deleted, labels
             FROM nodes
-            WHERE label = ? AND is_deleted = 0
+            WHERE is_deleted = 0
+              AND (label = ? OR EXISTS (
+                SELECT 1 FROM json_each(labels) WHERE json_each.value = ?
+              ))
             """,
-            [.text(label)]
+            [.text(label), .text(label)]
         ) { try Self.decodeRow($0) }
     }
 
@@ -89,6 +94,63 @@ public struct NodeRepository: Sendable {
             """,
             [
                 .text(json),
+                .real(Date().timeIntervalSince1970),
+                .text(try Self.encodeRevision(revision)),
+                .text(id.uuidString),
+            ]
+        )
+    }
+
+    // MARK: - Label operations
+
+    /// Add a label to an existing node.
+    public func addLabel(_ label: String, to id: NodeID, revision: GraphRevision) throws {
+        try Self.requireRealRevision(revision)
+        guard let existing = try fetch(id: id) else {
+            throw RepositoryError.notFound(id: id.uuidString)
+        }
+        var newLabels = existing.labels
+        newLabels.insert(label)
+        let labelsJSON = try Self.encodeLabels(newLabels)
+        let primaryLabel = newLabels.sorted().first ?? label
+        try store.execute(
+            """
+            UPDATE nodes
+            SET label = ?, labels = ?, modified_at = ?, revision = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            [
+                .text(primaryLabel),
+                .text(labelsJSON),
+                .real(Date().timeIntervalSince1970),
+                .text(try Self.encodeRevision(revision)),
+                .text(id.uuidString),
+            ]
+        )
+    }
+
+    /// Remove a label from an existing node. The node must retain at least one label.
+    public func removeLabel(_ label: String, from id: NodeID, revision: GraphRevision) throws {
+        try Self.requireRealRevision(revision)
+        guard let existing = try fetch(id: id) else {
+            throw RepositoryError.notFound(id: id.uuidString)
+        }
+        var newLabels = existing.labels
+        newLabels.remove(label)
+        guard !newLabels.isEmpty else {
+            throw RepositoryError.lastLabelRemoval
+        }
+        let labelsJSON = try Self.encodeLabels(newLabels)
+        let primaryLabel = newLabels.sorted().first ?? ""
+        try store.execute(
+            """
+            UPDATE nodes
+            SET label = ?, labels = ?, modified_at = ?, revision = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            [
+                .text(primaryLabel),
+                .text(labelsJSON),
                 .real(Date().timeIntervalSince1970),
                 .text(try Self.encodeRevision(revision)),
                 .text(id.uuidString),
@@ -137,9 +199,16 @@ public struct NodeRepository: Sendable {
         } else {
             revision = GraphRevision.placeholder(wallClock: Date(timeIntervalSince1970: modifiedAtRaw))
         }
+        // Column 7: labels JSON array (v4+). Fall back to single label if missing.
+        let labels: Set<String>
+        if let labelsJSON = row.text(at: 7), let parsed = try? decodeLabels(labelsJSON), !parsed.isEmpty {
+            labels = parsed
+        } else {
+            labels = [label]
+        }
         return Node(
             id: id,
-            label: label,
+            labels: labels,
             properties: properties,
             createdAt: Date(timeIntervalSince1970: createdAtRaw),
             modifiedAt: Date(timeIntervalSince1970: modifiedAtRaw),
@@ -151,6 +220,17 @@ public struct NodeRepository: Sendable {
     static func encodeRevision(_ revision: GraphRevision) throws -> String {
         let data = try JSONEncoder().encode(revision)
         return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    static func encodeLabels(_ labels: Set<String>) throws -> String {
+        let data = try JSONEncoder().encode(labels.sorted())
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    private static func decodeLabels(_ json: String) throws -> Set<String> {
+        guard let data = json.data(using: .utf8) else { return [] }
+        let arr = try JSONDecoder().decode([String].self, from: data)
+        return Set(arr)
     }
 
     static func requireRealRevision(_ revision: GraphRevision) throws {
@@ -170,4 +250,6 @@ public enum RepositoryError: Error, Equatable {
     /// Caller passed `GraphRevision.placeholder` to a write that requires a stamped revision.
     /// The graph actor mints a real revision on commit; tests / SPI callers must do the same.
     case placeholderRevision
+    /// Attempted to remove the last label from a node. Nodes must have at least one label.
+    case lastLabelRemoval
 }

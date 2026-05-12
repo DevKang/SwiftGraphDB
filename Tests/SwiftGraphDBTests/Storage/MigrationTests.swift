@@ -12,7 +12,7 @@ final class MigrationTests: XCTestCase {
         try MigrationRunner.runDefault(on: store)
 
         let version = try meta(store, key: "schema_version")
-        XCTAssertEqual(version, "3", "default ships v1 + v2 + v3; current head is 3")
+        XCTAssertEqual(version, "4", "default ships v1 + v2 + v3 + v4; current head is 4")
 
         let graphID = try meta(store, key: "graph_id")
         XCTAssertNotNil(graphID)
@@ -39,7 +39,7 @@ final class MigrationTests: XCTestCase {
         defer { store.close() }
         try MigrationRunner.runDefault(on: store)
         XCTAssertEqual(try meta(store, key: "graph_id"), firstID)
-        XCTAssertEqual(try meta(store, key: "schema_version"), "3")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "4")
     }
 
     // MARK: - Schema shape
@@ -78,7 +78,7 @@ final class MigrationTests: XCTestCase {
         }
         XCTAssertEqual(
             Set(columns),
-            ["id", "label", "properties", "created_at", "modified_at", "is_deleted", "revision"]
+            ["id", "label", "labels", "properties", "created_at", "modified_at", "is_deleted", "revision"]
         )
     }
 
@@ -129,10 +129,10 @@ final class MigrationTests: XCTestCase {
         try MigrationRunner.runDefault(on: store)
 
         let extended = MigrationRunner(migrations: MigrationRunner.defaultMigrations + [
-            Migration(version: 4, sql: "CREATE TABLE extension_table (id INTEGER PRIMARY KEY)"),
+            Migration(version: 5, sql: "CREATE TABLE extension_table (id INTEGER PRIMARY KEY)"),
         ])
         try extended.run(on: store)
-        XCTAssertEqual(try meta(store, key: "schema_version"), "4")
+        XCTAssertEqual(try meta(store, key: "schema_version"), "5")
 
         // Running again is a no-op.
         try extended.run(on: store)

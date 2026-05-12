@@ -83,6 +83,22 @@ public final class GraphStore: Sendable {
         try await actor.addNode(label: label, properties: properties)
     }
 
+    /// Add a node with multiple labels.
+    @discardableResult
+    public func addNode(labels: Set<String>, properties: [String: PropertyValue] = [:]) async throws -> NodeID {
+        try await actor.addNode(labels: labels, properties: properties)
+    }
+
+    /// Add a label to an existing node.
+    public func addLabel(_ label: String, to nodeID: NodeID) async throws {
+        try await actor.addLabel(label, to: nodeID)
+    }
+
+    /// Remove a label from an existing node. The node must retain at least one label.
+    public func removeLabel(_ label: String, from nodeID: NodeID) async throws {
+        try await actor.removeLabel(label, from: nodeID)
+    }
+
     @discardableResult
     public func addEdge(
         from: NodeID, to: NodeID, type: String,

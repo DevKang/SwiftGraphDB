@@ -10,7 +10,10 @@ import Foundation
 /// on commit; before that point newly-constructed nodes carry `GraphRevision.placeholder()`.
 public struct Node: Sendable {
     public let id: NodeID
-    public var label: String
+    /// The primary label (first element of `labels`). Backward-compatible accessor.
+    public var label: String { labels.sorted().first ?? "" }
+    /// All labels assigned to this node.
+    public var labels: Set<String>
     public var properties: [String: PropertyValue]
     public let createdAt: Date
     public var modifiedAt: Date
@@ -27,7 +30,27 @@ public struct Node: Sendable {
         isDeleted: Bool = false
     ) {
         self.id = id
-        self.label = label
+        self.labels = [label]
+        self.properties = properties
+        self.createdAt = createdAt
+        self.modifiedAt = modifiedAt
+        self.revision = revision ?? GraphRevision.placeholder(wallClock: createdAt)
+        self.isDeleted = isDeleted
+    }
+
+    /// Multi-label initializer.
+    public init(
+        id: NodeID = IDFactory.live.nodeID(),
+        labels: Set<String>,
+        properties: [String: PropertyValue] = [:],
+        createdAt: Date = Date(),
+        modifiedAt: Date = Date(),
+        revision: GraphRevision? = nil,
+        isDeleted: Bool = false
+    ) {
+        precondition(!labels.isEmpty, "Node must have at least one label")
+        self.id = id
+        self.labels = labels
         self.properties = properties
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
@@ -47,7 +70,7 @@ public struct Node: Sendable {
         }
         return Node(
             id: id,
-            label: label,
+            labels: labels,
             properties: merged,
             createdAt: createdAt,
             modifiedAt: Date(),
@@ -59,22 +82,27 @@ public struct Node: Sendable {
 
 extension Node: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, label, properties, createdAt, modifiedAt, revision, isDeleted
+        case id, label, labels, properties, createdAt, modifiedAt, revision, isDeleted
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let id = try c.decode(NodeID.self, forKey: .id)
-        let label = try c.decode(String.self, forKey: .label)
+        // Decode labels: prefer `labels` array, fall back to single `label` for backward compat.
+        let labels: Set<String>
+        if let labelsArray = try c.decodeIfPresent(Set<String>.self, forKey: .labels), !labelsArray.isEmpty {
+            labels = labelsArray
+        } else {
+            let singleLabel = try c.decode(String.self, forKey: .label)
+            labels = [singleLabel]
+        }
         let properties = try c.decode([String: PropertyValue].self, forKey: .properties)
         let createdAt = try c.decode(Date.self, forKey: .createdAt)
         let modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
-        // v0.1 payloads omit revision/isDeleted; default to placeholder + false so old
-        // serialized data continues to decode for one release cycle.
         let revision = try c.decodeIfPresent(GraphRevision.self, forKey: .revision)
             ?? GraphRevision.placeholder(wallClock: createdAt)
         let isDeleted = try c.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
-        self.init(id: id, label: label, properties: properties,
+        self.init(id: id, labels: labels, properties: properties,
                   createdAt: createdAt, modifiedAt: modifiedAt,
                   revision: revision, isDeleted: isDeleted)
     }
@@ -83,6 +111,7 @@ extension Node: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(label, forKey: .label)
+        try c.encode(labels, forKey: .labels)
         try c.encode(properties, forKey: .properties)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(modifiedAt, forKey: .modifiedAt)
