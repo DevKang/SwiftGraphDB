@@ -982,6 +982,7 @@ let edgeID = try await graph.addEdge(
     properties: ["since": .int(2021)]
 )
 
+try await graph.updateEdge(id: edgeID, properties: ["since": .int(2023)])
 try await graph.deleteEdge(id: edgeID)
 ```
 

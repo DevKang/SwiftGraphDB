@@ -72,6 +72,34 @@ final class GraphStoreEdgeQueryTests: XCTestCase {
         XCTAssertEqual(followsToC[0].fromID, b)
     }
 
+    // MARK: - Update Edge
+
+    func testUpdateEdgeMergesProperties() async throws {
+        let store = try await makeStore()
+        let a = try await store.addNode(label: "N")
+        let b = try await store.addNode(label: "N")
+        let edgeID = try await store.addEdge(from: a, to: b, type: "KNOWS", properties: ["since": .int(2020), "weight": .double(1.0)])
+
+        try await store.updateEdge(id: edgeID, properties: ["weight": .double(2.5), "note": .string("updated")])
+
+        let edge = try await store.edge(id: edgeID)
+        XCTAssertNotNil(edge)
+        XCTAssertEqual(edge?.properties["since"], .int(2020))      // preserved
+        XCTAssertEqual(edge?.properties["weight"], .double(2.5))   // updated
+        XCTAssertEqual(edge?.properties["note"], .string("updated")) // added
+    }
+
+    func testUpdateEdgeNonExistentThrows() async throws {
+        let store = try await makeStore()
+        let fakeID = UUID()
+        do {
+            try await store.updateEdge(id: fakeID, properties: ["x": .int(1)])
+            XCTFail("Expected error for non-existent edge")
+        } catch {
+            // expected
+        }
+    }
+
     func testEdgesOfType() async throws {
         let store = try await makeStore()
         let a = try await store.addNode(label: "N")

@@ -99,6 +99,10 @@ public final class GraphStore: Sendable {
         try await actor.deleteNode(id: id)
     }
 
+    public func updateEdge(id: EdgeID, properties: [String: PropertyValue]) async throws {
+        try await actor.updateEdge(id: id, properties: properties)
+    }
+
     public func deleteEdge(id: EdgeID) async throws {
         try await actor.deleteEdge(id: id)
     }
