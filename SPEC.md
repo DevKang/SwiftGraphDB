@@ -339,7 +339,7 @@ The local database uses SQLite in WAL mode with the following core schema.
 CREATE TABLE nodes (
     id          TEXT PRIMARY KEY,
     label       TEXT NOT NULL,
-    properties  BLOB NOT NULL,
+    properties  TEXT NOT NULL,
     created_at  REAL NOT NULL,
     modified_at REAL NOT NULL,
     revision    TEXT NOT NULL,
@@ -355,7 +355,7 @@ CREATE TABLE edges (
     type        TEXT NOT NULL,
     from_id     TEXT NOT NULL REFERENCES nodes(id),
     to_id       TEXT NOT NULL REFERENCES nodes(id),
-    properties  BLOB NOT NULL,
+    properties  TEXT NOT NULL,
     created_at  REAL NOT NULL,
     modified_at REAL NOT NULL,
     revision    TEXT NOT NULL,
@@ -412,7 +412,7 @@ CREATE TABLE db_meta (
     value   TEXT NOT NULL
 );
 
-INSERT INTO db_meta VALUES ('schema_version', '2');
+INSERT INTO db_meta VALUES ('schema_version', '3');
 INSERT INTO db_meta VALUES ('graph_id', '<UUID generated at creation>');
 INSERT INTO db_meta VALUES ('actor_id', '<UUID generated per local store>');
 ```
@@ -589,7 +589,7 @@ let path = try await graph.shortestPath(from: aliceID, to: bobID, via: "KNOWS")
 let paths = try await graph.allPaths(from: aliceID, to: bobID, maxDepth: 5)
 ```
 
-Shortest path uses BFS for unweighted edges and Dijkstra when edge weights are provided.
+Shortest path currently uses BFS (unweighted). Dijkstra for weighted edges is a future addition.
 
 ---
 
@@ -1119,10 +1119,13 @@ The `db_meta` table stores a `schema_version` integer. On open, SwiftGraphDB che
 enum Migration {
     static let migrations: [(version: Int, sql: String)] = [
         (1, createInitialSchema),
-        (2, addChangeJournalAndSyncProtocolTables)
+        (2, addChangeJournalAndSyncProtocolTables),
+        (3, migratePropertiesBlobToText)
     ]
 }
 ```
+
+Migration v3 converts `properties` columns in `nodes` and `edges` from `BLOB` to `TEXT NOT NULL` using a table-rebuild pattern. This enables SQLite `json_extract()` for native filtering, sorting, and pagination without loading rows into memory.
 
 ### 15.2 Sync Protocol Version
 
